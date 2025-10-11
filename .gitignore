@@ -16,6 +16,9 @@ dist/
 # Go workspace file
 go.work
 
+# Vendor directory (not needed with Bazel + go.mod)
+vendor/
+
 # Bazel outputs
 bazel-*
 /bazel-bin

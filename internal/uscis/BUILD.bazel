@@ -2,7 +2,10 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "uscis",
-    srcs = ["client.go"],
+    srcs = [
+        "client.go",
+        "detector.go",
+    ],
     importpath = "github.com/phhowardchen/case-tracker/internal/uscis",
     visibility = ["//:__subpackages__"],
 )
