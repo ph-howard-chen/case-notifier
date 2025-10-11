@@ -21,10 +21,18 @@ http_archive(
 )
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
-load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies", "go_repository")
 
 go_rules_dependencies()
 
 go_register_toolchains(version = "1.19.5")
 
 gazelle_dependencies()
+
+# External Go dependencies
+go_repository(
+    name = "com_github_resend_resend_go_v2",
+    importpath = "github.com/resend/resend-go/v2",
+    sum = "h1:Ctj2EekOZ2ggH9L5K7ZuO+1SIrO7Iy+Dy4pvNAafb1k=",
+    version = "v2.26.0",
+)

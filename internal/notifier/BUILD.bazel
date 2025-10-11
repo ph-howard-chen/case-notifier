@@ -5,6 +5,7 @@ go_library(
     srcs = ["resend.go"],
     importpath = "github.com/phhowardchen/case-tracker/internal/notifier",
     visibility = ["//:__subpackages__"],
+    deps = ["@com_github_resend_resend_go_v2//:resend-go"],
 )
 
 go_test(
