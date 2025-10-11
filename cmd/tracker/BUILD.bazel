@@ -1,0 +1,20 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "tracker_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/phhowardchen/case-tracker/cmd/tracker",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//internal/config",
+        "//internal/notifier",
+        "//internal/storage",
+        "//internal/uscis",
+    ],
+)
+
+go_binary(
+    name = "tracker",
+    embed = [":tracker_lib"],
+    visibility = ["//visibility:public"],
+)
