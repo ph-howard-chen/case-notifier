@@ -30,8 +30,24 @@ func main() {
 	log.Printf("  Poll Interval: %v", cfg.PollInterval)
 	log.Printf("  State Directory: %s", cfg.StateFileDir)
 
-	// Initialize clients (shared across all cases)
-	uscisClient := uscis.NewClient(cfg.USCISCookie)
+	// Initialize USCIS client based on authentication mode
+	var uscisClient *uscis.Client
+
+	if cfg.AutoLogin {
+		log.Println("  Authentication: Auto-login mode (username/password)")
+		log.Printf("  Username: %s", cfg.USCISUsername)
+		log.Printf("  Password: %s", cfg.USCISPassword)
+		uscisClient, err = uscis.NewClientWithAutoLogin(cfg.USCISUsername, cfg.USCISPassword)
+		if err != nil {
+			log.Fatalf("Failed to create USCIS client with auto-login: %v", err)
+		}
+		log.Println("  Successfully logged in")
+	} else {
+		log.Println("  Authentication: Manual cookie mode")
+		uscisClient = uscis.NewClient(cfg.USCISCookie)
+	}
+
+	// Initialize email client
 	emailClient := notifier.NewResendClient(cfg.ResendAPIKey)
 
 	// Create ticker for polling

@@ -198,9 +198,353 @@ STATE_FILE_DIR=/tmp/case-tracker-states/
 
 ---
 
-## Phase 5: Containerization & Deployment
+## Phase 5: Automated Login (Basic - No 2FA)
 
-### 18. Dockerfile
+### 18. USCIS Authentication Module (Basic Login)
+**File:** `internal/uscis/auth.go`
+- `Login(username, password string) (string, error)`
+  - Performs login WITHOUT 2FA handling
+  - Returns session cookie value
+  - Uses `http.Client` with `cookiejar.New()` for automatic cookie management
+- `extractCSRFToken(loginPageHTML string) (string, error)`
+  - Scrape login page for CSRF token if needed
+  - Return empty string if no CSRF required
+- `submitLogin(username, password, csrfToken string) (*http.Response, []*http.Cookie, error)`
+  - Submit login credentials to USCIS login endpoint
+  - Return response and all cookies from cookie jar
+  - Handle basic error cases (invalid credentials, network errors)
+- `extractSessionCookie(cookies []*http.Cookie, cookieName string) (string, error)`
+  - Extract specific cookie by name from cookie jar (`_myuscis_session_rx`)
+  - Return full cookie format: `_myuscis_session_rx=<value>`
+- Implement retry logic with exponential backoff for network errors
+- **Note:** This version assumes login succeeds without 2FA challenge
+
+### 19. Enhanced USCIS Client (Basic Auto-Login)
+**Update:** `internal/uscis/client.go`
+- Add `NewClientWithAutoLogin(username, password string) (*Client, error)`
+  - Calls basic `auth.Login()` without 2FA
+  - Returns authenticated client with session cookie
+  - Store credentials for future refresh
+- Add `RefreshSession() error`
+  - Re-authenticate using stored credentials
+  - Called automatically on 401 errors
+  - Updates client's cookie with new session
+- Keep `NewClient(cookie string)` for backward compatibility
+- Add private fields to store auto-login credentials:
+  - `username string`
+  - `password string`
+  - `autoLoginEnabled bool`
+- Modify `FetchCaseStatus()`:
+  - On 401 error, check if `autoLoginEnabled`
+  - If true, call `RefreshSession()` and retry request
+  - If false or refresh fails, return `ErrAuthenticationFailed`
+
+### 20. Configuration for Basic Auto-Login
+**Update:** `internal/config/config.go`
+- Add new fields to `Config` struct:
+  - `AutoLogin bool` - Enable/disable auto-login mode
+  - `USCISUsername string` - USCIS account username
+  - `USCISPassword string` - USCIS account password
+- Parse new environment variables:
+  - `AUTO_LOGIN` - Set to "true" to enable (default: false)
+  - `USCIS_USERNAME` - USCIS account username
+  - `USCIS_PASSWORD` - USCIS account password
+- Validation logic:
+  - If `AUTO_LOGIN=true`, require `USCIS_USERNAME` and `USCIS_PASSWORD`
+  - If `AUTO_LOGIN=false` or unset, require `USCIS_COOKIE` (current behavior)
+  - Fail fast with clear error messages
+- **Note:** No email-related fields yet (Phase 6)
+
+### 21. Update Main Application for Basic Auto-Login
+**Update:** `cmd/tracker/main.go`
+- Check `cfg.AutoLogin` flag on startup
+- Initialize USCIS client based on mode:
+  - Auto-login mode: Call `uscis.NewClientWithAutoLogin(username, password)`
+  - Manual mode: Call `uscis.NewClient(cookie)` (existing behavior)
+- Log which authentication mode is active:
+  - "Using auto-login mode (username/password)"
+  - "Using manual cookie mode"
+- Error handling in `checkAndNotifyCase()`:
+  - On 401 error, client will auto-refresh if auto-login enabled
+  - If refresh succeeds, continue polling
+  - If refresh fails, send cookie expired email (existing behavior)
+- **Note:** No 2FA handling yet
+
+### 22. Update Configuration Examples
+**Update:** `.env.example`
+- Add authentication mode section
+- Document two modes: Manual Cookie vs. Basic Auto-Login
+- Example:
+```bash
+# Authentication Mode
+AUTO_LOGIN=false
+
+# Manual Cookie Mode (AUTO_LOGIN=false)
+USCIS_COOKIE='_myuscis_session_rx=...'
+
+# Auto-Login Mode (AUTO_LOGIN=true) - Basic (No 2FA support yet)
+USCIS_USERNAME=your_username
+USCIS_PASSWORD=your_password
+
+# Note: If your account requires 2FA, use manual cookie mode for now
+# 2FA support will be added in Phase 6
+```
+
+### 23. Dependencies and Build
+- No new dependencies needed for basic login
+- Standard library packages sufficient: `net/http`, `net/http/cookiejar`, `net/url`
+- Run `gazelle` to update BUILD.bazel files
+
+### 24. Testing Basic Login Flow
+**Files:** `internal/uscis/auth_test.go`
+- Unit tests with mocked HTTP responses for login flow
+- Test successful login and cookie extraction
+- Test CSRF token extraction (if required)
+- Test cookie extraction by name from cookie jar
+- Test error cases (invalid credentials, network errors)
+- Test retry logic with exponential backoff
+- Integration test with test credentials (if available)
+- Manual testing with real USCIS account (WITHOUT 2FA)
+
+### **Phase 5 Summary: Why Auto-Login Needs a Real Browser**
+
+**The Challenge: AWS WAF JavaScript Puzzle**
+
+When you try to login to USCIS with simple code, AWS WAF (Web Application Firewall) responds with:
+
+```bash
+$ curl -X POST 'https://myaccount.uscis.gov/v1/authentication/sign_in' \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "test@example.com", "password": "test"}'
+
+HTTP/2 202
+x-amzn-waf-action: challenge  ← "Solve this puzzle first!"
+content-length: 0              ← No response body
+```
+
+**What does "challenge" mean?**
+
+AWS WAF is saying: "Before I let you login, prove you're a real browser, not a bot."
+
+Think of it like a CAPTCHA, but invisible:
+1. 🧩 WAF gives you a JavaScript puzzle
+2. 💻 Your browser must run the JavaScript to solve it
+3. ✅ Only after solving it can you submit login credentials
+
+**Why `curl` or `net/http` can't work:**
+
+```
+Simple HTTP client (curl/net/http):
+  ❌ Can't run JavaScript
+  ❌ Can't solve the puzzle
+  ❌ Can't login
+
+Real browser (Chrome):
+  ✅ Runs JavaScript automatically
+  ✅ Solves AWS WAF puzzle
+  ✅ Can login successfully
+```
+
+**Solution: Use chromedp (Chrome automation)**
+
+We use **chromedp** to launch a real Chrome browser programmatically:
+
+```go
+// chromedp opens Chrome, navigates to login page, fills form, extracts cookies
+cookie, err := uscis.Login(username, password)
+```
+
+What happens behind the scenes:
+1. Chrome opens and loads `https://myaccount.uscis.gov/sign-in`
+2. AWS WAF JavaScript runs automatically (puzzle solved!)
+3. chromedp fills in email/password fields
+4. chromedp clicks "Sign In" button
+5. chromedp extracts the session cookie from browser
+6. Returns cookie to your Go program
+
+**Browser Mode: Headless vs Non-Headless**
+
+| Mode             | What it means                     | Works on your Mac? | Works in Cloud Run? |
+|------------------|-----------------------------------|--------------------|---------------------|
+| **Headless**     | Chrome runs invisibly             | Probably yes       | Maybe (not tested)  |
+| **Non-Headless** | Chrome opens a window you can see | Yes                | No (no display)     |
+
+Currently using **non-headless** for easier debugging (you can see what's happening).
+
+**Cloud Run Problem:**
+
+Cloud Run containers don't have a display, so:
+- Non-headless mode won't work (can't open window)
+- Headless mode might work, but adds complexity:
+  - Larger Docker image (+300-500MB for Chrome)
+  - More memory needed (512MB-1GB)
+  - Harder to debug if something breaks
+
+**Recommendation: Use Manual Cookie for Cloud Run**
+
+| Approach         | Best for                  | Why                                       |
+|------------------|---------------------------|-------------------------------------------|
+| **Manual Cookie** | Production (Cloud Run)    | Simple, lightweight, proven to work      |
+| **Auto-Login**    | Local development         | Convenient, but needs Chrome browser     |
+
+For Cloud Run deployment:
+- Set `AUTO_LOGIN=false`
+- Manually get cookie from browser DevTools
+- Set `USCIS_COOKIE=_myuscis_session_rx=...`
+- Simple, works reliably
+
+**Dependencies Added:**
+```go
+go.mod:
+  github.com/chromedp/chromedp v0.14.2
+  github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
+  github.com/chromedp/sysutil v1.1.0
+  github.com/gobwas/ws v1.4.0
+  github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2
+```
+
+**Build Notes:**
+- Updated WORKSPACE to include all chromedp dependencies
+- Updated `internal/uscis/BUILD.bazel` to depend on chromedp
+- Go version requirement increased to 1.23.0 (from 1.19.5)
+- Can build with `go build` directly (Bazel compatibility issues with Go 1.23)
+
+
+### Cookie
+aws-waf-token: This proves your chromedp browser successfully solved the AWS WAF JavaScript challenge. This is often the hardest part, so this is a major success.
+bm_sv and ak_bmsc: These are from Akamai Bot Manager, another advanced anti-bot service. Getting these cookies means you have also passed Akamai's initial browser checks.
+
+---
+
+## Phase 6: Add 2FA Support
+
+### 25. Email IMAP Client
+**File:** `internal/email/imap.go`
+- Create new package `internal/email/` for fetching 2FA codes
+- `NewIMAPClient(server, username, password string) *IMAPClient`
+  - Constructor for IMAP client
+  - Store connection details
+- `Connect() error`
+  - Connect to IMAP server with TLS
+  - Login to email account
+  - Select INBOX
+- `FetchLatest2FACode(senderEmail string, maxWaitTime time.Duration) (string, error)`
+  - Search for recent emails from specific sender (last 5 minutes)
+  - Wait up to `maxWaitTime` for email to arrive (polling with backoff)
+  - Parse email body (handle both plain text and HTML)
+  - Extract 6-digit verification code using regex: `(\d{6})`
+  - Return code or timeout error
+- `Close() error`
+  - Disconnect from IMAP server
+- Support Gmail, Outlook, Yahoo, and other IMAP providers
+- Dependencies: Add `github.com/emersion/go-imap/v2` to go.mod and WORKSPACE
+
+### 26. Update USCIS Authentication for 2FA
+**Update:** `internal/uscis/auth.go`
+- Update `Login(username, password string, imapClient *email.IMAPClient) (string, error)`
+  - Add optional `imapClient` parameter (can be nil for no 2FA)
+  - If 2FA detected and imapClient is nil, return error
+- Add `detect2FARequired(resp *http.Response) bool`
+  - Check response for 2FA challenge indicators
+  - Look for redirect to 2FA page or specific response body markers
+  - Return true if 2FA is required
+- Add `submit2FACode(code string, cookies []*http.Cookie) (*http.Response, []*http.Cookie, error)`
+  - Submit verification code to 2FA endpoint
+  - Use cookies from initial login
+  - Return updated response and cookies
+- Update login flow:
+  1. Submit username/password
+  2. Check if 2FA required
+  3. If yes and imapClient provided:
+     - Fetch code from email
+     - Submit code
+     - Extract final session cookie
+  4. If yes but no imapClient:
+     - Return error with helpful message
+  5. If no, extract session cookie directly
+
+### 27. Update Configuration for 2FA
+**Update:** `internal/config/config.go`
+- Add email-related fields to `Config` struct:
+  - `EmailIMAPServer string` - IMAP server:port (e.g., imap.gmail.com:993)
+  - `EmailUsername string` - Email account for receiving 2FA
+  - `EmailPassword string` - Email app password
+  - `Email2FASender string` - Sender address of 2FA emails
+  - `Email2FATimeout time.Duration` - Max wait time for 2FA code (default: 5 minutes)
+- Parse new environment variables:
+  - `EMAIL_IMAP_SERVER` - IMAP server:port
+  - `EMAIL_USERNAME` - Email account
+  - `EMAIL_PASSWORD` - Email app password (NOT main password)
+  - `EMAIL_2FA_SENDER` - Sender address (e.g., noreply@uscis.gov)
+  - `EMAIL_2FA_TIMEOUT` - Optional, defaults to 5m
+- Validation logic:
+  - If `AUTO_LOGIN=true`, email fields are optional
+  - If email fields are set, validate all are present
+  - Log whether 2FA support is enabled or not
+
+### 28. Update USCIS Client for 2FA
+**Update:** `internal/uscis/client.go`
+- Update `NewClientWithAutoLogin(username, password string, imapClient *email.IMAPClient) (*Client, error)`
+  - Accept optional `imapClient` parameter (can be nil)
+  - Pass to `auth.Login()`
+  - Store imapClient reference for refresh
+- Update `RefreshSession()` to use stored imapClient if available
+- Add field: `imapClient *email.IMAPClient`
+
+### 29. Update Main Application for 2FA
+**Update:** `cmd/tracker/main.go`
+- When `cfg.AutoLogin=true`, check if email settings are configured
+- If email settings present:
+  - Create `email.NewIMAPClient()` with email credentials
+  - Pass to `NewClientWithAutoLogin()`
+  - Log: "Auto-login mode with 2FA support enabled"
+- If email settings absent:
+  - Pass nil for imapClient
+  - Log: "Auto-login mode without 2FA support (add email settings if needed)"
+- Handle 2FA-related errors gracefully with helpful messages
+
+### 30. Update Configuration Examples
+**Update:** `.env.example`
+- Add email section to auto-login mode
+- Document app password setup for Gmail/Outlook
+- Example:
+```bash
+# Auto-Login Mode (AUTO_LOGIN=true)
+USCIS_USERNAME=your_username
+USCIS_PASSWORD=your_password
+
+# Email IMAP Settings (Optional - for 2FA support)
+# For Gmail: Enable IMAP and create app password at https://myaccount.google.com/apppasswords
+# For Outlook: Enable IMAP and use account password or app password
+EMAIL_IMAP_SERVER=imap.gmail.com:993
+EMAIL_USERNAME=your_email@gmail.com
+EMAIL_PASSWORD=your_app_password
+EMAIL_2FA_SENDER=noreply@uscis.gov
+EMAIL_2FA_TIMEOUT=5m
+```
+
+### 31. Dependencies and Build
+- Add `github.com/emersion/go-imap/v2` to go.mod
+- Add corresponding `go_repository` to WORKSPACE
+- Run `gazelle` to update BUILD.bazel files
+- May need additional dependencies: go-message, go-sasl
+
+### 32. Testing 2FA Flow
+**Files:** `internal/email/imap_test.go`, `internal/uscis/auth_test.go`
+- Unit tests with mocked IMAP server responses
+- Unit tests with mocked HTTP responses for 2FA flow
+- Test 2FA detection logic
+- Test 2FA code parsing from email body (various formats)
+- Test timeout handling if code doesn't arrive
+- Test end-to-end flow with mocked services
+- Integration test with real email account (if available)
+- Manual testing with real USCIS account requiring 2FA
+
+---
+
+## Phase 7: Containerization & Deployment
+
+### 33. Dockerfile
 - Multi-stage build:
   1. Build stage: Use Bazel to build binary
   2. Runtime stage: Minimal base image (distroless or alpine)
@@ -208,7 +552,7 @@ STATE_FILE_DIR=/tmp/case-tracker-states/
 - Set entrypoint to `/tracker`
 - No EXPOSE needed for Cloud Run (it's a worker, not a server)
 
-### 19. Cloud Run Configuration
+### 34. Cloud Run Configuration
 **Option A: Using Cloud Build**
 - Create `cloudbuild.yaml`:
   - Build Docker image
@@ -225,7 +569,7 @@ STATE_FILE_DIR=/tmp/case-tracker-states/
 - Environment variables for secrets
 - Use Secret Manager for sensitive values
 
-### 20. Environment Setup Documentation
+### 35. Environment Setup Documentation
 **In README.md:**
 - GCP project setup
 - Enable Cloud Run API
@@ -233,7 +577,7 @@ STATE_FILE_DIR=/tmp/case-tracker-states/
 - Store secrets in Secret Manager
 - Deploy command examples
 
-### 21. .gitignore
+### 36. .gitignore
 Exclude:
 - `bazel-*` directories
 - `*.json` (state files)
@@ -243,9 +587,9 @@ Exclude:
 
 ---
 
-## Phase 6: Open Source Preparation (Milestone 3)
+## Phase 8: Open Source Preparation (Milestone 3)
 
-### 22. README.md
+### 37. README.md
 Sections:
 - Project overview and purpose
 - Prerequisites (Go, Bazel, GCP account, Resend account)
@@ -257,18 +601,18 @@ Sections:
 - Troubleshooting section
 - Contributing link
 
-### 23. LICENSE
+### 38. LICENSE
 - Choose MIT License (most permissive for community use)
 - Add copyright notice
 
-### 24. CONTRIBUTING.md
+### 39. CONTRIBUTING.md
 - Code style guidelines
 - How to submit issues
 - Pull request process
 - Testing requirements
 - Branch naming convention (howardchen-* per global config)
 
-### 25. .env.example
+### 40. .env.example Template
 Template file:
 ```bash
 USCIS_COOKIE=your_cookie_here
@@ -279,7 +623,7 @@ POLL_INTERVAL=5m
 STATE_FILE_DIR=/tmp/case-tracker-states/
 ```
 
-### 26. Architecture Documentation
+### 41. Architecture Documentation
 **Create docs/ARCHITECTURE.md:**
 - System diagram (ASCII or link to diagram)
 - Component descriptions
@@ -356,13 +700,30 @@ For **Milestone 2.5** (Function Enhancement):
 12. Enhanced state storage with timestamps (Phase 4: items 15-16)
 13. Update configuration examples (Phase 4: item 17)
 
+For **Milestone 2.75** (Basic Auto-Login):
+14. Implement USCIS authentication module - basic login (Phase 5: item 18)
+15. Update USCIS client for basic auto-login (Phase 5: item 19)
+16. Update configuration for basic auto-login (Phase 5: item 20)
+17. Update main application (Phase 5: item 21)
+18. Update .env.example (Phase 5: item 22)
+19. Update dependencies and test (Phase 5: items 23-24)
+
+For **Milestone 2.8** (Add 2FA Support):
+20. Create email IMAP client (Phase 6: item 25)
+21. Update USCIS authentication for 2FA detection (Phase 6: item 26)
+22. Update configuration for email/2FA (Phase 6: item 27)
+23. Update USCIS client to pass IMAP client (Phase 6: item 28)
+24. Update main application for 2FA (Phase 6: item 29)
+25. Update .env.example with email settings (Phase 6: item 30)
+26. Update dependencies and test (Phase 6: items 31-32)
+
 For **Milestone 3** (Production & Open Source):
-14. Create Dockerfile (Phase 5: item 18)
-15. Set up Cloud Run deployment (Phase 5: items 19-20)
-16. Write documentation (Phase 6: items 22-26)
-17. Add LICENSE and contributing guidelines (Phase 6: items 23-24)
-18. Create .env.example (Phase 6: item 25)
-19. Final testing and release
+27. Create Dockerfile (Phase 7: item 33)
+28. Set up Cloud Run deployment (Phase 7: items 34-35)
+29. Write documentation (Phase 8: items 37-41)
+30. Add LICENSE and contributing guidelines (Phase 8: items 38-39)
+31. Create .env.example template (Phase 8: item 40)
+32. Final testing and release
 
 ---
 
@@ -370,6 +731,7 @@ For **Milestone 3** (Production & Open Source):
 
 ### Go Packages
 - `github.com/resend/resend-go` - Resend SDK
+- `github.com/emersion/go-imap/v2` - IMAP client for email 2FA code retrieval
 - Standard library: `net/http`, `encoding/json`, `time`, `os`, `log`
 
 ### Bazel Rules
@@ -393,6 +755,10 @@ For **Milestone 3** (Production & Open Source):
 4. **Input validation** - Validate case ID format
 5. **Secret management** - Use GCP Secret Manager for production
 6. **Minimal permissions** - Cloud Run service account with least privilege
+7. **Credential storage for auto-login** - Store USCIS credentials in environment variables or Secret Manager, never commit
+8. **Email app passwords** - Require app-specific passwords for IMAP access, not main account passwords
+9. **2FA timing** - Handle delayed email delivery gracefully with configurable timeouts
+10. **Login rate limiting** - Implement exponential backoff on failed login attempts to avoid account lockout
 
 ---
 
@@ -413,5 +779,5 @@ For **Milestone 3** (Production & Open Source):
 - SMS notifications via Twilio
 - Prometheus metrics export
 - Slack/Discord notification options
-- Automatic cookie refresh (if possible)
 - State file cleanup/retention policy (e.g., keep last 30 days)
+- Headless browser automation as fallback (Playwright/Puppeteer) if USCIS changes API
