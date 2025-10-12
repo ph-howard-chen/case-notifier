@@ -1,11 +1,12 @@
 package uscis
 
 import (
+	"bufio"
 	"context"
-	// "encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -16,91 +17,169 @@ const (
 	loginPageURL = "https://myaccount.uscis.gov/sign-in"
 )
 
-// Login performs basic authentication using headless browser (no 2FA support yet)
+// Login performs authentication using headless browser with manual 2FA support
 // Returns the session cookie string in format: name=value
+// If 2FA is required, prompts user to enter verification code via stdin
 func Login(username, password string) (string, error) {
-	// 1. Set up a longer timeout for potentially slow network/JS challenges
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	// 2. Add flags to make the headless browser harder to detect
+	// Configure headless browser with bot detection evasion
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true), // Crucial for running in a container
+		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
-		// --- Key changes for bot detection evasion ---
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),                                                                       // Removes the "navigator.webdriver" flag
-		chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36`), // Use a common user agent
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36`),
 	)
 
-	// Create allocator context
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel()
 
-	// Create chromedp context
 	ctx, cancel = chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	// add listern
-	// chromedp.ListenTarget(ctx, func(ev interface{}) {
-	// 	if req, ok := ev.(*network.EventRequestWillBeSent); ok {
-	// 		// Use json.MarshalIndent for a pretty-printed JSON output
-	// 		jsonData, err := json.MarshalIndent(req, "", "  ") // Indent with 2 spaces
-	// 		if err != nil {
-	// 			log.Printf("Could not marshal event data: %v", err)
-	// 			return
-	// 		}
-
-	// 		// Print the full JSON data for the request
-	// 		log.Printf("%s\n", string(jsonData))
-	// 	}
-	// })
-
-	log.Print("start chromedp.Run()\n")
-	// This slice will hold the cookies after a successful login
+	log.Println("Starting login automation...")
 	var cookies []*network.Cookie
+	var currentURL string
+	var screenshotBuf []byte
 
-	var screenshotBuf []byte // Buffer to hold the screenshot
-
+	// Perform login and wait for AWS WAF challenges
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(loginPageURL),
 		chromedp.WaitVisible(`#email-address`, chromedp.ByQuery),
 		chromedp.SendKeys(`#email-address`, username, chromedp.ByQuery),
 		chromedp.SendKeys(`#password`, password, chromedp.ByQuery),
-		// this work: verify by wrong password
 		chromedp.WaitEnabled("sign-in-btn", chromedp.ByID),
 		chromedp.Click("sign-in-btn", chromedp.ByID),
-
-		// Wait for potential redirects and JS challenges
-		chromedp.Sleep(10*time.Second),
-		// chromedp.WaitVisible(`your-cases`, chromedp.ByID),
-
-		// --- ALWAYS TAKE A SCREENSHOT AFTER THE WAIT ---
+		chromedp.Sleep(10*time.Second), // Wait for AWS WAF challenges and redirects
 		chromedp.FullScreenshot(&screenshotBuf, 90),
-
-		// 4. Get all cookies after the page has loaded successfully
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if err := os.WriteFile(fmt.Sprintf("after_signin_%s.png", time.Now().Format("2006-01-02T15-04-05")), screenshotBuf, 0644); err != nil {
+				log.Printf("Failed to save screenshot: %v\n", err)
+			}
+			return nil
+		}),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if err := chromedp.Location(&currentURL).Do(ctx); err != nil {
+				return err
+			}
+			log.Printf("Current URL after login: %s\n", currentURL)
+			return nil
+		}),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			var err error
 			cookies, err = network.GetCookies().Do(ctx)
+			if err != nil {
+				log.Printf("Failed to get cookies after signin: %v", err)
+			}
+			log.Printf("Check cookies after signin\n")
+			for _, cookie := range cookies {
+				log.Printf("\tcookie: %s=%s\n", cookie.Name, cookie.Value)
+			}
 			return err
 		}),
 	)
-
-	// --- ALWAYS SAVE THE SCREENSHOT FOR REVIEW ---
-	if err := os.WriteFile(fmt.Sprintf("final_page_view_%s.png", time.Now().Format("2006-01-02T15-04-05")), screenshotBuf, 0644); err != nil {
-		log.Printf("Failed to save screenshot: %v", err)
-	}
-
 	if err != nil {
 		return "", fmt.Errorf("login automation failed: %w", err)
 	}
 
-	// 5. Process the cookies after the browser tasks are complete
-	log.Printf("Start check cookies\n")
-	for _, cookie := range cookies {
-		log.Printf("\tcookie: %s=%s\n", cookie.Name, cookie.Value)
+	// Handle 2FA if required
+	if strings.Contains(currentURL, "/auth") {
+		log.Println("2FA verification required - please check your email for the verification code")
+
+		fmt.Print("Enter 2FA verification code: ")
+		reader := bufio.NewReader(os.Stdin)
+		code, err := reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("failed to read verification code: %w", err)
+		}
+		code = strings.TrimSpace(code)
+
+		log.Println("Submitting verification code...")
+		err = chromedp.Run(ctx,
+			// use SendKeys
+			// when using JavaScript to set value directly, after submitting, the input field gets cleared and error "Secure verification code cannot be blank
+			chromedp.WaitEnabled(`secure-verification-code`, chromedp.ByID),
+			chromedp.SendKeys(`#secure-verification-code`, code, chromedp.ByQuery),
+
+			// chromedp.WaitVisible(`input#secure-verification-code`, chromedp.ByQuery),
+			// chromedp.ActionFunc(func(ctx context.Context) error {
+			// 	// Use JavaScript to set the value and trigger events for form validation
+			// 	jsCode := fmt.Sprintf(`
+			// 		const input = document.getElementById('secure-verification-code');
+			// 		input.value = '%s';
+			// 		input.dispatchEvent(new Event('input', { bubbles: true }));
+			// 		input.dispatchEvent(new Event('change', { bubbles: true }));
+			// 		input.value; // Return the value to verify
+			// 	`, code)
+			// 	var actualValue string
+			// 	if err := chromedp.Evaluate(jsCode, &actualValue).Do(ctx); err != nil {
+			// 		return fmt.Errorf("failed to set verification code: %w", err)
+			// 	}
+			// 	if actualValue != code {
+			// 		return fmt.Errorf("verification code mismatch: expected '%s', got '%s'", code, actualValue)
+			// 	}
+			// 	log.Printf("Verification code set and confirmed: %s", actualValue)
+			// 	return nil
+			// }),
+			chromedp.FullScreenshot(&screenshotBuf, 90), // Screenshot BEFORE clicking
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				if err := os.WriteFile(fmt.Sprintf("before_2fa_submit_%s.png", time.Now().Format("2006-01-02T15-04-05")), screenshotBuf, 0644); err != nil {
+					log.Printf("Failed to save pre-submit screenshot: %v\n", err)
+				}
+				return nil
+			}),
+			chromedp.Sleep(1*time.Second),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				// Use JavaScript to click button since chromedp.Click doesn't work reliably here
+				var exists bool
+				if err := chromedp.Evaluate(`document.getElementById('2fa-submit-btn') !== null`, &exists).Do(ctx); err != nil {
+					return err
+				}
+				if !exists {
+					return fmt.Errorf("submit button not found in DOM")
+				}
+				return chromedp.Evaluate(`document.getElementById('2fa-submit-btn').click()`, nil).Do(ctx)
+			}),
+			chromedp.Sleep(10*time.Second),              // Wait for verification
+			chromedp.FullScreenshot(&screenshotBuf, 90), // Screenshot AFTER clicking
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				if err := os.WriteFile(fmt.Sprintf("after_2fa_submit_%s.png", time.Now().Format("2006-01-02T15-04-05")), screenshotBuf, 0644); err != nil {
+					log.Printf("Failed to save post-submit screenshot: %v\n", err)
+				}
+				return nil
+			}),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				if err := chromedp.Location(&currentURL).Do(ctx); err != nil {
+					return err
+				}
+				log.Printf("Current URL after auth: %s\n", currentURL)
+				return nil
+			}),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				var err error
+				cookies, err = network.GetCookies().Do(ctx)
+				if err != nil {
+					log.Printf("Failed to get cookies after 2fa: %v\n", err)
+				}
+				log.Printf("Check cookies after 2fa\n")
+				for _, cookie := range cookies {
+					log.Printf("\tcookie: %s=%s\n", cookie.Name, cookie.Value)
+				}
+				return nil
+			}),
+		)
+
+		if err != nil {
+			return "", fmt.Errorf("2FA submission failed: %w", err)
+		}
+
+		log.Println("2FA verification completed successfully")
 	}
+
+	// Extract session cookie
 	cookieNames := []string{"_uscis_user_session", "_myuscis_session_rx"}
 	for _, cookieName := range cookieNames {
 		for _, cookie := range cookies {

@@ -42,6 +42,7 @@ func main() {
 			log.Fatalf("Failed to create USCIS client with auto-login: %v", err)
 		}
 		log.Println("  Successfully logged in")
+		return
 	} else {
 		log.Println("  Authentication: Manual cookie mode")
 		uscisClient = uscis.NewClient(cfg.USCISCookie)
