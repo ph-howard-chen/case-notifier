@@ -364,12 +364,10 @@ What happens behind the scenes:
 
 **Browser Mode: Headless vs Non-Headless**
 
-| Mode             | What it means                     | Works on your Mac? | Works in Cloud Run? |
-|------------------|-----------------------------------|--------------------|---------------------|
-| **Headless**     | Chrome runs invisibly             | Probably yes       | Maybe (not tested)  |
-| **Non-Headless** | Chrome opens a window you can see | Yes                | No (no display)     |
-
-Currently using **non-headless** for easier debugging (you can see what's happening).
+| Mode             | What it means                     | Works on Mac? | Works in Cloud Run? |
+|------------------|-----------------------------------|---------------|---------------------|
+| **Headless**     | Chrome runs invisibly             | yes           | Maybe (not tested)  |
+| **Non-Headless** | Chrome opens a window you can see | Yes           | No (no display)     |
 
 **Cloud Run Problem:**
 
@@ -380,39 +378,9 @@ Cloud Run containers don't have a display, so:
   - More memory needed (512MB-1GB)
   - Harder to debug if something breaks
 
-**Recommendation: Use Manual Cookie for Cloud Run**
-
-| Approach         | Best for                  | Why                                       |
-|------------------|---------------------------|-------------------------------------------|
-| **Manual Cookie** | Production (Cloud Run)    | Simple, lightweight, proven to work      |
-| **Auto-Login**    | Local development         | Convenient, but needs Chrome browser     |
-
-For Cloud Run deployment:
-- Set `AUTO_LOGIN=false`
-- Manually get cookie from browser DevTools
-- Set `USCIS_COOKIE=_myuscis_session_rx=...`
-- Simple, works reliably
-
-**Dependencies Added:**
-```go
-go.mod:
-  github.com/chromedp/chromedp v0.14.2
-  github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
-  github.com/chromedp/sysutil v1.1.0
-  github.com/gobwas/ws v1.4.0
-  github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2
-```
-
-**Build Notes:**
-- Updated WORKSPACE to include all chromedp dependencies
-- Updated `internal/uscis/BUILD.bazel` to depend on chromedp
-- Go version requirement increased to 1.23.0 (from 1.19.5)
-- Can build with `go build` directly (Bazel compatibility issues with Go 1.23)
-
-
-### Cookie
-aws-waf-token: This proves your chromedp browser successfully solved the AWS WAF JavaScript challenge. This is often the hardest part, so this is a major success.
-bm_sv and ak_bmsc: These are from Akamai Bot Manager, another advanced anti-bot service. Getting these cookies means you have also passed Akamai's initial browser checks.
+**aws-waf-token:**
+This proves your chromedp browser successfully solved the AWS WAF JavaScript challenge. This is often the hardest part, so this is a major success.
+**bm_sv and ak_bmsc:** These are from Akamai Bot Manager, another advanced anti-bot service. Getting these cookies means you have also passed Akamai's initial browser checks.
 
 ---
 

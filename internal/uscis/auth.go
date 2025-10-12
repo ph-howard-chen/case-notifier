@@ -2,7 +2,9 @@ package uscis
 
 import (
 	"context"
+	// "encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -40,7 +42,22 @@ func Login(username, password string) (string, error) {
 	ctx, cancel = chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	fmt.Print("start chromedp.Run()\n")
+	// add listern
+	// chromedp.ListenTarget(ctx, func(ev interface{}) {
+	// 	if req, ok := ev.(*network.EventRequestWillBeSent); ok {
+	// 		// Use json.MarshalIndent for a pretty-printed JSON output
+	// 		jsonData, err := json.MarshalIndent(req, "", "  ") // Indent with 2 spaces
+	// 		if err != nil {
+	// 			log.Printf("Could not marshal event data: %v", err)
+	// 			return
+	// 		}
+
+	// 		// Print the full JSON data for the request
+	// 		log.Printf("%s\n", string(jsonData))
+	// 	}
+	// })
+
+	log.Print("start chromedp.Run()\n")
 	// This slice will hold the cookies after a successful login
 	var cookies []*network.Cookie
 
@@ -71,10 +88,8 @@ func Login(username, password string) (string, error) {
 	)
 
 	// --- ALWAYS SAVE THE SCREENSHOT FOR REVIEW ---
-	if err := os.WriteFile(
-		fmt.Sprintf("final_page_view_%s.png", time.Now().Format("2006-01-02T15-04-05")),
-		screenshotBuf, 0644); err != nil {
-		fmt.Printf("Failed to save screenshot: %v", err)
+	if err := os.WriteFile(fmt.Sprintf("final_page_view_%s.png", time.Now().Format("2006-01-02T15-04-05")), screenshotBuf, 0644); err != nil {
+		log.Printf("Failed to save screenshot: %v", err)
 	}
 
 	if err != nil {
@@ -82,9 +97,9 @@ func Login(username, password string) (string, error) {
 	}
 
 	// 5. Process the cookies after the browser tasks are complete
-	fmt.Printf("check cookies\n")
+	log.Printf("Start check cookies\n")
 	for _, cookie := range cookies {
-		fmt.Printf("cookie: %s=%s\n", cookie.Name, cookie.Value)
+		log.Printf("\tcookie: %s=%s\n", cookie.Name, cookie.Value)
 	}
 	cookieNames := []string{"_uscis_user_session", "_myuscis_session_rx"}
 	for _, cookieName := range cookieNames {

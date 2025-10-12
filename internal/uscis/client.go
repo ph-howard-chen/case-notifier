@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -79,14 +80,14 @@ func (c *Client) FetchCaseStatus(caseID string) (map[string]interface{}, error) 
 	// If we get a 401 and auto-login is enabled, try to refresh and retry once
 	if err != nil {
 		if authErr, ok := err.(*ErrAuthenticationFailed); ok && c.autoLoginEnabled {
-			fmt.Printf("Authentication failed (status %d), attempting session refresh...\n", authErr.StatusCode)
+			log.Printf("Authentication failed (status %d), attempting session refresh...\n", authErr.StatusCode)
 
 			// Try to refresh the session
 			if refreshErr := c.RefreshSession(); refreshErr != nil {
 				return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
 			}
 
-			fmt.Println("Session refreshed successfully, retrying request...")
+			log.Println("Session refreshed successfully, retrying request...")
 
 			// Retry the request with new cookie
 			result, err = c.fetchCaseStatusInternal(caseID)
