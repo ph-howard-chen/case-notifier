@@ -10,7 +10,7 @@ else
 fi
 
 # Check required environment variables
-required_vars=("USCIS_COOKIE" "CASE_ID" "RESEND_API_KEY" "RECIPIENT_EMAIL")
+required_vars=("USCIS_COOKIE" "CASE_IDS" "RESEND_API_KEY" "RECIPIENT_EMAIL")
 for var in "${required_vars[@]}"; do
     if [ -z "${!var}" ]; then
         echo "Error: $var is not set in .env"

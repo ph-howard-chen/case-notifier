@@ -25,26 +25,14 @@ func main() {
 	}
 
 	log.Printf("Configuration loaded successfully")
-	log.Printf("  Case ID: %s", cfg.CaseID)
+	log.Printf("  Case IDs: %v", cfg.CaseIDs)
 	log.Printf("  Recipient: %s", cfg.RecipientEmail)
 	log.Printf("  Poll Interval: %v", cfg.PollInterval)
+	log.Printf("  State Directory: %s", cfg.StateFileDir)
 
-	// Initialize clients
+	// Initialize clients (shared across all cases)
 	uscisClient := uscis.NewClient(cfg.USCISCookie)
 	emailClient := notifier.NewResendClient(cfg.ResendAPIKey)
-	stateStorage := storage.NewFileStorage(cfg.StateFilePath)
-
-	log.Printf("  State File: %s", cfg.StateFilePath)
-
-	// Load previous state
-	previousState, err := stateStorage.Load()
-	if err != nil {
-		log.Printf("Warning: Failed to load previous state: %v", err)
-	} else if previousState == nil {
-		log.Printf("No previous state found - this is the first run")
-	} else {
-		log.Printf("Loaded previous state successfully")
-	}
 
 	// Create ticker for polling
 	ticker := time.NewTicker(cfg.PollInterval)
@@ -54,31 +42,31 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Run initial check immediately
-	if err := checkAndNotify(uscisClient, emailClient, stateStorage, cfg, previousState); err != nil {
-		log.Printf("Error in initial check: %v", err)
-		// Update previous state even if notification failed
-		if err.Error() != "authentication failed, exiting: authentication failed: received status code 401 (cookie may have expired)" {
-			previousState, _ = stateStorage.Load()
+	// Run initial check immediately for all cases
+	log.Printf("Running initial check for %d case(s)...", len(cfg.CaseIDs))
+	for _, caseID := range cfg.CaseIDs {
+		if err := checkAndNotifyCase(uscisClient, emailClient, cfg, caseID); err != nil {
+			log.Printf("Error in initial check for case %s: %v", caseID, err)
+			// Check for auth failure - if so, stop everything
+			if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
+				log.Fatalf("Authentication failed, cannot continue")
+			}
 		}
-	} else {
-		// Update previous state after successful check
-		previousState, _ = stateStorage.Load()
 	}
 
 	// Main loop
 	for {
 		select {
 		case <-ticker.C:
-			if err := checkAndNotify(uscisClient, emailClient, stateStorage, cfg, previousState); err != nil {
-				log.Printf("Error checking case status: %v", err)
-				// Update previous state even if notification failed
-				if err.Error() != "authentication failed, exiting: authentication failed: received status code 401 (cookie may have expired)" {
-					previousState, _ = stateStorage.Load()
+			log.Printf("Polling %d case(s)...", len(cfg.CaseIDs))
+			for _, caseID := range cfg.CaseIDs {
+				if err := checkAndNotifyCase(uscisClient, emailClient, cfg, caseID); err != nil {
+					log.Printf("Error checking case %s: %v", caseID, err)
+					// Check for auth failure - if so, stop everything
+					if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
+						log.Fatalf("Authentication failed, cannot continue")
+					}
 				}
-			} else {
-				// Update previous state after successful check
-				previousState, _ = stateStorage.Load()
 			}
 		case sig := <-sigChan:
 			log.Printf("Received signal %v, shutting down gracefully...", sig)
@@ -87,11 +75,20 @@ func main() {
 	}
 }
 
-func checkAndNotify(uscisClient *uscis.Client, emailClient *notifier.ResendClient, stateStorage storage.Storage, cfg *config.Config, previousState map[string]interface{}) error {
-	log.Printf("Fetching case status for %s...", cfg.CaseID)
+func checkAndNotifyCase(uscisClient *uscis.Client, emailClient *notifier.ResendClient, cfg *config.Config, caseID string) error {
+	log.Printf("Fetching case status for %s...", caseID)
+
+	// Create storage for this specific case
+	stateStorage := storage.NewFileStorage(cfg.StateFileDir, caseID)
+
+	// Load previous state for this case
+	previousState, err := stateStorage.Load()
+	if err != nil {
+		log.Printf("Warning: Failed to load previous state for %s: %v", caseID, err)
+	}
 
 	// Fetch case status
-	status, err := uscisClient.FetchCaseStatus(cfg.CaseID)
+	status, err := uscisClient.FetchCaseStatus(caseID)
 	if err != nil {
 		// Check if it's an authentication error
 		if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
@@ -126,43 +123,44 @@ func checkAndNotify(uscisClient *uscis.Client, emailClient *notifier.ResendClien
 	hasChanges := len(changes) > 0
 
 	if isFirstRun {
-		log.Printf("First run - sending initial status email")
-		subject := fmt.Sprintf("USCIS Case Tracker - Initial Status for %s", cfg.CaseID)
-		body := formatInitialStatusEmail(status)
+		log.Printf("[%s] First run - sending initial status email", caseID)
+		subject := fmt.Sprintf("USCIS Case Tracker - Initial Status for %s", caseID)
+		body := formatInitialStatusEmail(status, caseID)
 		if err := emailClient.SendEmail(cfg.RecipientEmail, subject, body); err != nil {
 			return fmt.Errorf("failed to send initial email: %w", err)
 		}
-		log.Printf("Initial status email sent successfully")
+		log.Printf("[%s] Initial status email sent successfully", caseID)
 	} else if hasChanges {
-		log.Printf("Changes detected: %d fields changed", len(changes))
-		subject := fmt.Sprintf("USCIS Case Status Update - %s", cfg.CaseID)
-		body := formatChangeNotificationEmail(changes, status)
+		log.Printf("[%s] Changes detected: %d fields changed", caseID, len(changes))
+		subject := fmt.Sprintf("USCIS Case Status Update - %s", caseID)
+		body := formatChangeNotificationEmail(changes, status, caseID)
 		if err := emailClient.SendEmail(cfg.RecipientEmail, subject, body); err != nil {
 			return fmt.Errorf("failed to send change notification: %w", err)
 		}
-		log.Printf("Change notification email sent successfully")
+		log.Printf("[%s] Change notification email sent successfully", caseID)
 	} else {
-		log.Printf("No changes detected - skipping email notification")
+		log.Printf("[%s] No changes detected - skipping email notification", caseID)
 	}
 
 	return nil
 }
 
-func formatInitialStatusEmail(status map[string]interface{}) string {
+func formatInitialStatusEmail(status map[string]interface{}, caseID string) string {
 	jsonBytes, _ := json.MarshalIndent(status, "", "  ")
 
 	html := fmt.Sprintf(`
 		<h2>USCIS Case Tracker - Initial Status</h2>
+		<p><strong>Case ID:</strong> %s</p>
 		<p>This is the first status check for your case. Future emails will only be sent when changes are detected.</p>
 		<h3>Current Status:</h3>
 		<pre style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; font-family: monospace;">%s</pre>
 		<p><small>This email was sent by USCIS Case Tracker</small></p>
-	`, string(jsonBytes))
+	`, caseID, string(jsonBytes))
 
 	return html
 }
 
-func formatChangeNotificationEmail(changes []uscis.Change, status map[string]interface{}) string {
+func formatChangeNotificationEmail(changes []uscis.Change, status map[string]interface{}, caseID string) string {
 	jsonBytes, _ := json.MarshalIndent(status, "", "  ")
 
 	// Build changes list
@@ -180,12 +178,13 @@ func formatChangeNotificationEmail(changes []uscis.Change, status map[string]int
 
 	html := fmt.Sprintf(`
 		<h2>USCIS Case Status Update Detected!</h2>
+		<p><strong>Case ID:</strong> %s</p>
 		<p>The following changes were detected in your case status:</p>
 		%s
 		<h3>Full Current Status:</h3>
 		<pre style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; overflow-x: auto; font-family: monospace;">%s</pre>
 		<p><small>This email was sent by USCIS Case Tracker</small></p>
-	`, changesHTML, string(jsonBytes))
+	`, caseID, changesHTML, string(jsonBytes))
 
 	return html
 }
