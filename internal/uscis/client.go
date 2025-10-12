@@ -13,8 +13,11 @@ const (
 
 // Client is the USCIS API client
 type Client struct {
-	httpClient *http.Client
-	cookie     string
+	httpClient       *http.Client
+	cookie           string
+	autoLoginEnabled bool
+	username         string
+	password         string
 }
 
 // ErrAuthenticationFailed is returned when the cookie has expired (401)
@@ -26,16 +29,75 @@ func (e *ErrAuthenticationFailed) Error() string {
 	return fmt.Sprintf("authentication failed: received status code %d (cookie may have expired)", e.StatusCode)
 }
 
-// NewClient creates a new USCIS client
+// NewClient creates a new USCIS client with manual cookie
 func NewClient(cookie string) *Client {
 	return &Client{
-		httpClient: &http.Client{},
-		cookie:     cookie,
+		httpClient:       &http.Client{},
+		cookie:           cookie,
+		autoLoginEnabled: false,
 	}
 }
 
+// NewClientWithAutoLogin creates a new USCIS client with auto-login support
+// Performs initial login and stores credentials for automatic session refresh
+func NewClientWithAutoLogin(username, password string) (*Client, error) {
+	// Perform initial login
+	cookie, err := Login(username, password)
+	if err != nil {
+		return nil, fmt.Errorf("initial login failed: %w", err)
+	}
+
+	return &Client{
+		httpClient:       &http.Client{},
+		cookie:           cookie,
+		autoLoginEnabled: true,
+		username:         username,
+		password:         password,
+	}, nil
+}
+
+// RefreshSession re-authenticates and updates the session cookie
+func (c *Client) RefreshSession() error {
+	if !c.autoLoginEnabled {
+		return fmt.Errorf("auto-login not enabled for this client")
+	}
+
+	cookie, err := Login(c.username, c.password)
+	if err != nil {
+		return fmt.Errorf("session refresh failed: %w", err)
+	}
+
+	c.cookie = cookie
+	return nil
+}
+
 // FetchCaseStatus fetches the current status of a case
+// Automatically retries with session refresh on 401 errors when auto-login is enabled
 func (c *Client) FetchCaseStatus(caseID string) (map[string]interface{}, error) {
+	result, err := c.fetchCaseStatusInternal(caseID)
+
+	// If we get a 401 and auto-login is enabled, try to refresh and retry once
+	if err != nil {
+		if authErr, ok := err.(*ErrAuthenticationFailed); ok && c.autoLoginEnabled {
+			fmt.Printf("Authentication failed (status %d), attempting session refresh...\n", authErr.StatusCode)
+
+			// Try to refresh the session
+			if refreshErr := c.RefreshSession(); refreshErr != nil {
+				return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
+			}
+
+			fmt.Println("Session refreshed successfully, retrying request...")
+
+			// Retry the request with new cookie
+			result, err = c.fetchCaseStatusInternal(caseID)
+		}
+	}
+
+	return result, err
+}
+
+// fetchCaseStatusInternal performs the actual HTTP request
+func (c *Client) fetchCaseStatusInternal(caseID string) (map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/%s", baseURL, caseID)
 
 	req, err := http.NewRequest("GET", url, nil)
