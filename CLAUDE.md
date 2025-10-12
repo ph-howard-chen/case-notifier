@@ -153,9 +153,54 @@ case-tracker/
 
 ---
 
-## Phase 4: Containerization & Deployment
+## Phase 4: Function Enhancement
 
-### 14. Dockerfile
+### 14. Multi-Case Configuration
+**Update:** `internal/config/config.go`
+- Change `CaseID string` to `CaseIDs []string`
+- Change `StateFilePath string` to `StateFileDir string`
+- Parse `CASE_IDS` environment variable as comma-separated list
+- Default `STATE_FILE_DIR` to `/tmp/case-tracker-states/`
+- Validate at least one case ID is provided
+- Example: `CASE_IDS=IOE0933798378,IOE0944567890,IOE0955123456`
+
+### 15. Enhanced State Storage with Timestamps
+**Update:** `internal/storage/storage.go`
+- Add case ID parameter to `NewFileStorage(stateDir, caseID string)`
+- State file naming: `{STATE_FILE_DIR}/case-{caseID}-{YYYYMMDD-HHMMSS}.json`
+- Generate readable timestamp suffix for each state file
+- Keep historical states instead of overwriting
+- Ensure directory creation
+- Load latest state by reading most recent timestamp file
+
+### 16. Multi-Case Main Loop
+**Update:** `cmd/tracker/main.go`
+- Loop through each case ID from `config.CaseIDs`
+- For each case:
+  - Create separate `FileStorage` instance with case ID
+  - Load previous state for this case (latest by timestamp)
+  - Fetch and check status independently
+  - Send separate email per case (clearer than grouping)
+- Add case ID to all log messages: `log.Printf("[Case: %s] ...", caseID)`
+- Process cases sequentially (simpler) or concurrently with goroutines (faster)
+- Handle errors per case without stopping other cases
+
+### 17. Update Configuration Examples
+**Update:** `.env.example`
+- Change `CASE_ID` to `CASE_IDS` (comma-separated)
+- Change `STATE_FILE_PATH` to `STATE_FILE_DIR`
+- Document backward compatibility break
+- Example template:
+```bash
+CASE_IDS=IOE0933798378,IOE0944567890
+STATE_FILE_DIR=/tmp/case-tracker-states/
+```
+
+---
+
+## Phase 5: Containerization & Deployment
+
+### 18. Dockerfile
 - Multi-stage build:
   1. Build stage: Use Bazel to build binary
   2. Runtime stage: Minimal base image (distroless or alpine)
@@ -163,7 +208,7 @@ case-tracker/
 - Set entrypoint to `/tracker`
 - No EXPOSE needed for Cloud Run (it's a worker, not a server)
 
-### 15. Cloud Run Configuration
+### 19. Cloud Run Configuration
 **Option A: Using Cloud Build**
 - Create `cloudbuild.yaml`:
   - Build Docker image
@@ -180,7 +225,7 @@ case-tracker/
 - Environment variables for secrets
 - Use Secret Manager for sensitive values
 
-### 16. Environment Setup Documentation
+### 20. Environment Setup Documentation
 **In README.md:**
 - GCP project setup
 - Enable Cloud Run API
@@ -188,7 +233,7 @@ case-tracker/
 - Store secrets in Secret Manager
 - Deploy command examples
 
-### 17. .gitignore
+### 21. .gitignore
 Exclude:
 - `bazel-*` directories
 - `*.json` (state files)
@@ -198,9 +243,9 @@ Exclude:
 
 ---
 
-## Phase 5: Open Source Preparation (Milestone 3)
+## Phase 6: Open Source Preparation (Milestone 3)
 
-### 18. README.md
+### 22. README.md
 Sections:
 - Project overview and purpose
 - Prerequisites (Go, Bazel, GCP account, Resend account)
@@ -212,29 +257,29 @@ Sections:
 - Troubleshooting section
 - Contributing link
 
-### 19. LICENSE
+### 23. LICENSE
 - Choose MIT License (most permissive for community use)
 - Add copyright notice
 
-### 20. CONTRIBUTING.md
+### 24. CONTRIBUTING.md
 - Code style guidelines
 - How to submit issues
 - Pull request process
 - Testing requirements
 - Branch naming convention (howardchen-* per global config)
 
-### 21. .env.example
+### 25. .env.example
 Template file:
 ```bash
 USCIS_COOKIE=your_cookie_here
-CASE_ID=IOE0933798378
+CASE_IDS=IOE0933798378
 RESEND_API_KEY=re_xxxxxxxxxxxx
 RECIPIENT_EMAIL=your-email@example.com
 POLL_INTERVAL=5m
-STATE_FILE_PATH=/tmp/case-tracker-state.json
+STATE_FILE_DIR=/tmp/case-tracker-states/
 ```
 
-### 22. Architecture Documentation
+### 26. Architecture Documentation
 **Create docs/ARCHITECTURE.md:**
 - System diagram (ASCII or link to diagram)
 - Component descriptions
@@ -306,13 +351,18 @@ For **Milestone 2** (Smart notifications):
 9. Add 401 error handling (Phase 3: item 12)
 10. Write unit tests (Phase 3: item 13)
 
+For **Milestone 2.5** (Function Enhancement):
+11. Support multiple case IDs (Phase 4: item 14)
+12. Enhanced state storage with timestamps (Phase 4: items 15-16)
+13. Update configuration examples (Phase 4: item 17)
+
 For **Milestone 3** (Production & Open Source):
-11. Create Dockerfile (Phase 4: item 14)
-12. Set up Cloud Run deployment (Phase 4: items 15-16)
-13. Write documentation (Phase 5: items 18-22)
-14. Add LICENSE and contributing guidelines (Phase 5: items 19-20)
-15. Create .env.example (Phase 5: item 21)
-16. Final testing and release
+14. Create Dockerfile (Phase 5: item 18)
+15. Set up Cloud Run deployment (Phase 5: items 19-20)
+16. Write documentation (Phase 6: items 22-26)
+17. Add LICENSE and contributing guidelines (Phase 6: items 23-24)
+18. Create .env.example (Phase 6: item 25)
+19. Final testing and release
 
 ---
 
@@ -358,10 +408,10 @@ For **Milestone 3** (Production & Open Source):
 
 ## Future Enhancements (Post-Milestone 3)
 
-- Support multiple case IDs in single deployment
 - Web UI for configuration (no need to redeploy)
 - Database backend for state (PostgreSQL/Firestore)
 - SMS notifications via Twilio
 - Prometheus metrics export
 - Slack/Discord notification options
 - Automatic cookie refresh (if possible)
+- State file cleanup/retention policy (e.g., keep last 30 days)
