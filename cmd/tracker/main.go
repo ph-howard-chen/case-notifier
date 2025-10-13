@@ -65,6 +65,15 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// Run initial check immediately for all cases
+	log.Printf("Running initial check for %d case(s)...", len(cfg.CaseIDs))
+	for _, caseID := range cfg.CaseIDs {
+		if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
+			log.Printf("Error checking case %s: %v", caseID, err)
+			return
+		}
+	}
+
 	// Main loop
 	for {
 		select {
