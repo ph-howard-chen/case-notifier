@@ -13,8 +13,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-
-// go build -o test_login test_login.go 
+// go build -o test_login test_login.go
 // ./test_login
 
 const (
@@ -22,7 +21,7 @@ const (
 	applicantURL = "https://my.uscis.gov/account/applicant"
 )
 
-func main() {
+func main_test() {
 	// Get credentials from environment
 	username := os.Getenv("USCIS_USERNAME")
 	password := os.Getenv("USCIS_PASSWORD")
