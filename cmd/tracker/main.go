@@ -15,6 +15,12 @@ import (
 	"github.com/phhowardchen/case-tracker/internal/uscis"
 )
 
+// CaseStatusFetcher is an interface for fetching case status
+// Implemented by both Client (HTTP) and BrowserClient (chromedp)
+type CaseStatusFetcher interface {
+	FetchCaseStatus(caseID string) (map[string]interface{}, error)
+}
+
 func main() {
 	log.Println("USCIS Case Tracker starting...")
 
@@ -31,21 +37,21 @@ func main() {
 	log.Printf("  State Directory: %s", cfg.StateFileDir)
 
 	// Initialize USCIS client based on authentication mode
-	var uscisClient *uscis.Client
+	var fetcher CaseStatusFetcher
 
 	if cfg.AutoLogin {
-		log.Println("  Authentication: Auto-login mode (username/password)")
+		log.Println("  Authentication: Auto-login mode (chromedp browser)")
 		log.Printf("  Username: %s", cfg.USCISUsername)
-		log.Printf("  Password: %s", cfg.USCISPassword)
-		uscisClient, err = uscis.NewClientWithAutoLogin(cfg.USCISUsername, cfg.USCISPassword)
+		browserClient, err := uscis.NewBrowserClient(cfg.USCISUsername, cfg.USCISPassword)
 		if err != nil {
-			log.Fatalf("Failed to create USCIS client with auto-login: %v", err)
+			log.Fatalf("Failed to create browser client: %v", err)
 		}
-		log.Println("  Successfully logged in")
-		return
+		defer browserClient.Close()
+		log.Println("  Successfully logged in with browser")
+		fetcher = browserClient
 	} else {
-		log.Println("  Authentication: Manual cookie mode")
-		uscisClient = uscis.NewClient(cfg.USCISCookie)
+		log.Println("  Authentication: Manual cookie mode (HTTP client)")
+		fetcher = uscis.NewClient(cfg.USCISCookie)
 	}
 
 	// Initialize email client
@@ -62,12 +68,9 @@ func main() {
 	// Run initial check immediately for all cases
 	log.Printf("Running initial check for %d case(s)...", len(cfg.CaseIDs))
 	for _, caseID := range cfg.CaseIDs {
-		if err := checkAndNotifyCase(uscisClient, emailClient, cfg, caseID); err != nil {
-			log.Printf("Error in initial check for case %s: %v", caseID, err)
-			// Check for auth failure - if so, stop everything
-			if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
-				log.Fatalf("Authentication failed, cannot continue")
-			}
+		if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
+			log.Printf("Error checking case %s: %v", caseID, err)
+			return
 		}
 	}
 
@@ -77,12 +80,9 @@ func main() {
 		case <-ticker.C:
 			log.Printf("Polling %d case(s)...", len(cfg.CaseIDs))
 			for _, caseID := range cfg.CaseIDs {
-				if err := checkAndNotifyCase(uscisClient, emailClient, cfg, caseID); err != nil {
+				if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
 					log.Printf("Error checking case %s: %v", caseID, err)
-					// Check for auth failure - if so, stop everything
-					if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
-						log.Fatalf("Authentication failed, cannot continue")
-					}
+					return
 				}
 			}
 		case sig := <-sigChan:
@@ -92,7 +92,7 @@ func main() {
 	}
 }
 
-func checkAndNotifyCase(uscisClient *uscis.Client, emailClient *notifier.ResendClient, cfg *config.Config, caseID string) error {
+func checkAndNotifyCase(fetcher CaseStatusFetcher, emailClient *notifier.ResendClient, cfg *config.Config, caseID string) error {
 	log.Printf("Fetching case status for %s...", caseID)
 
 	// Create storage for this specific case
@@ -105,7 +105,7 @@ func checkAndNotifyCase(uscisClient *uscis.Client, emailClient *notifier.ResendC
 	}
 
 	// Fetch case status
-	status, err := uscisClient.FetchCaseStatus(caseID)
+	status, err := fetcher.FetchCaseStatus(caseID)
 	if err != nil {
 		// Check if it's an authentication error
 		if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
@@ -126,11 +126,6 @@ func checkAndNotifyCase(uscisClient *uscis.Client, emailClient *notifier.ResendC
 	}
 
 	log.Printf("Case status fetched successfully")
-
-	// Save current state to storage
-	if err := stateStorage.Save(status); err != nil {
-		log.Printf("Warning: Failed to save state: %v", err)
-	}
 
 	// Detect changes
 	changes := uscis.DetectChanges(previousState, status)
@@ -157,6 +152,13 @@ func checkAndNotifyCase(uscisClient *uscis.Client, emailClient *notifier.ResendC
 		log.Printf("[%s] Change notification email sent successfully", caseID)
 	} else {
 		log.Printf("[%s] No changes detected - skipping email notification", caseID)
+	}
+
+	// Save current state to storage if has first run or has changes
+	if isFirstRun || hasChanges {
+		if err := stateStorage.Save(status); err != nil {
+			log.Printf("Warning: Failed to save state: %v", err)
+		}
 	}
 
 	return nil
