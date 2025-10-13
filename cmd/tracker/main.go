@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phhowardchen/case-tracker/internal/config"
+	"github.com/phhowardchen/case-tracker/internal/email"
 	"github.com/phhowardchen/case-tracker/internal/notifier"
 	"github.com/phhowardchen/case-tracker/internal/storage"
 	"github.com/phhowardchen/case-tracker/internal/uscis"
@@ -42,10 +43,39 @@ func main() {
 	if cfg.AutoLogin {
 		log.Println("  Authentication: Auto-login mode (chromedp browser)")
 		log.Printf("  Username: %s", cfg.USCISUsername)
-		browserClient, err := uscis.NewBrowserClient(cfg.USCISUsername, cfg.USCISPassword)
-		if err != nil {
-			log.Fatalf("Failed to create browser client: %v", err)
+
+		// Check if email 2FA settings are configured
+		var browserClient *uscis.BrowserClient
+		if cfg.EmailIMAPServer != "" && cfg.EmailUsername != "" && cfg.EmailPassword != "" && cfg.Email2FASender != "" {
+			log.Println("  2FA: Automated email fetch enabled")
+			log.Printf("  Email Server: %s", cfg.EmailIMAPServer)
+			log.Printf("  Email Account: %s", cfg.EmailUsername)
+			log.Printf("  2FA Sender: %s", cfg.Email2FASender)
+			log.Printf("  2FA Timeout: %v", cfg.Email2FATimeout)
+
+			// Create IMAP client for automated 2FA
+			imapClient := email.NewIMAPClient(cfg.EmailIMAPServer, cfg.EmailUsername, cfg.EmailPassword)
+
+			// Create browser client with email support
+			browserClient, err = uscis.NewBrowserClientWithEmail(
+				cfg.USCISUsername,
+				cfg.USCISPassword,
+				imapClient,
+				cfg.Email2FASender,
+				cfg.Email2FATimeout,
+			)
+			if err != nil {
+				log.Fatalf("Failed to create browser client with email 2FA: %v", err)
+			}
+		} else {
+			log.Println("  2FA: Manual stdin input (email settings not configured)")
+			// Create browser client without email support (falls back to stdin for 2FA)
+			browserClient, err = uscis.NewBrowserClient(cfg.USCISUsername, cfg.USCISPassword)
+			if err != nil {
+				log.Fatalf("Failed to create browser client: %v", err)
+			}
 		}
+
 		defer browserClient.Close()
 		log.Println("  Successfully logged in with browser")
 		fetcher = browserClient

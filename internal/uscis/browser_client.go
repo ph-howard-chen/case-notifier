@@ -13,6 +13,11 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// EmailFetcher is an interface for fetching 2FA codes from email
+type EmailFetcher interface {
+	FetchLatest2FACode(senderEmail string, maxWaitTime time.Duration) (string, error)
+}
+
 const (
 	loginPageURL = "https://myaccount.uscis.gov/sign-in"
 	applicantURL = "https://my.uscis.gov/account/applicant"
@@ -27,12 +32,21 @@ type BrowserClient struct {
 	allocCancel  context.CancelFunc
 	username     string
 	password     string
+	emailClient  EmailFetcher // Optional: for automated 2FA
+	email2FASender string      // Sender email for 2FA emails
+	email2FATimeout time.Duration // Timeout for waiting for 2FA email
 }
 
 // NewBrowserClient creates a new browser client and performs login with 2FA support
 // The browser session remains active and is used for subsequent API calls
 // Call Close() when done to cleanup resources
 func NewBrowserClient(username, password string) (*BrowserClient, error) {
+	return NewBrowserClientWithEmail(username, password, nil, "", 5*time.Minute)
+}
+
+// NewBrowserClientWithEmail creates a new browser client with automated email 2FA support
+// If emailClient is nil, falls back to manual stdin prompt for 2FA
+func NewBrowserClientWithEmail(username, password string, emailClient EmailFetcher, email2FASender string, email2FATimeout time.Duration) (*BrowserClient, error) {
 	// Create context without timeout - we want to keep it alive
 	ctx := context.Background()
 
@@ -50,11 +64,14 @@ func NewBrowserClient(username, password string) (*BrowserClient, error) {
 	browserCtx, cancel := chromedp.NewContext(allocCtx)
 
 	client := &BrowserClient{
-		ctx:         browserCtx,
-		cancel:      cancel,
-		allocCancel: allocCancel,
-		username:    username,
-		password:    password,
+		ctx:             browserCtx,
+		cancel:          cancel,
+		allocCancel:     allocCancel,
+		username:        username,
+		password:        password,
+		emailClient:     emailClient,
+		email2FASender:  email2FASender,
+		email2FATimeout: email2FATimeout,
 	}
 
 	// Perform login
@@ -112,17 +129,34 @@ func (bc *BrowserClient) login() error {
 	return nil
 }
 
-// handle2FA handles the 2FA flow by prompting user for verification code
+// handle2FA handles the 2FA flow by fetching code from email or prompting user
 func (bc *BrowserClient) handle2FA() error {
-	log.Println("2FA verification required - please check your email for the verification code")
+	log.Println("2FA verification required")
 
-	fmt.Print("Enter 2FA verification code: ")
-	reader := bufio.NewReader(os.Stdin)
-	code, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read verification code: %w", err)
+	var code string
+	var err error
+
+	// Try automated email fetch if configured
+	if bc.emailClient != nil && bc.email2FASender != "" {
+		log.Printf("Fetching 2FA code from email (sender: %s)...", bc.email2FASender)
+		code, err = bc.emailClient.FetchLatest2FACode(bc.email2FASender, bc.email2FATimeout)
+		if err != nil {
+			log.Printf("Failed to fetch 2FA code from email: %v", err)
+			log.Println("Falling back to manual input...")
+		}
 	}
-	code = strings.TrimSpace(code)
+
+	// Fall back to manual input if email fetch failed or not configured
+	if code == "" {
+		log.Println("Please check your email for the verification code")
+		fmt.Print("Enter 2FA verification code: ")
+		reader := bufio.NewReader(os.Stdin)
+		code, err = reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read verification code: %w", err)
+		}
+		code = strings.TrimSpace(code)
+	}
 
 	log.Printf("Submitting verification code %s...", code)
 	var currentURL string
