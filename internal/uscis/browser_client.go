@@ -160,8 +160,44 @@ func (bc *BrowserClient) handle2FA() error {
 	return nil
 }
 
+// RefreshSession re-authenticates by running the login flow again
+// Useful when the browser session expires during long-running polling
+func (bc *BrowserClient) RefreshSession() error {
+	log.Println("Refreshing browser session...")
+	return bc.login()
+}
+
 // FetchCaseStatus fetches case status by navigating to the API URL in the browser
+// Automatically retries once with session refresh if the response indicates auth failure
 func (bc *BrowserClient) FetchCaseStatus(caseID string) (map[string]interface{}, error) {
+	result, err := bc.fetchCaseStatusInternal(caseID)
+
+	// Check if response indicates authentication failure
+	shouldRefresh := false
+	if result != nil {
+		if data, ok := result["data"]; ok && data == nil {
+			// API returned null data, might be auth issue
+			shouldRefresh = true
+		}
+	}
+
+	// If we detect possible auth failure, try to refresh and retry once
+	if shouldRefresh {
+		log.Println("Possible session expiration detected (null data), attempting to refresh...")
+
+		if refreshErr := bc.RefreshSession(); refreshErr != nil {
+			return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
+		}
+
+		log.Println("Session refreshed, retrying request...")
+		result, err = bc.fetchCaseStatusInternal(caseID)
+	}
+
+	return result, err
+}
+
+// fetchCaseStatusInternal performs the actual API call via browser navigation
+func (bc *BrowserClient) fetchCaseStatusInternal(caseID string) (map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/%s", caseAPIURL, caseID)
 
 	var apiResponse string

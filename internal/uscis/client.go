@@ -60,23 +60,23 @@ func (c *Client) fetchCaseStatusInternal(caseID string) (map[string]interface{},
 	}
 	defer resp.Body.Close()
 
-	// Check for authentication errors
+	// Read response body first (needed for both success and error cases)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// Check for authentication errors (401 with JSON error body)
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, &ErrAuthenticationFailed{StatusCode: resp.StatusCode}
 	}
 
 	// Check for other HTTP errors
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	// Read and parse response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
+	// Parse JSON response
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON response: %w", err)

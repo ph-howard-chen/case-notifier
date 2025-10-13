@@ -73,10 +73,7 @@ func main() {
 			for _, caseID := range cfg.CaseIDs {
 				if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
 					log.Printf("Error checking case %s: %v", caseID, err)
-					// Check for auth failure - if so, stop everything
-					if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
-						log.Fatalf("Authentication failed, cannot continue")
-					}
+					return
 				}
 			}
 		case sig := <-sigChan:
