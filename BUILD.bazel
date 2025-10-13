@@ -1,4 +1,5 @@
 load("@bazel_gazelle//:def.bzl", "gazelle")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary")
 
 # gazelle:prefix github.com/phhowardchen/case-tracker
 gazelle(name = "gazelle")
@@ -11,4 +12,13 @@ gazelle(
         "-prune",
     ],
     command = "update-repos",
+)
+
+go_binary(
+    name = "test_login",
+    srcs = ["test_login.go"],
+    deps = [
+        "@com_github_chromedp_cdproto//network",
+        "@com_github_chromedp_chromedp//:chromedp",
+    ],
 )
