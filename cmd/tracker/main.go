@@ -65,18 +65,6 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Run initial check immediately for all cases
-	log.Printf("Running initial check for %d case(s)...", len(cfg.CaseIDs))
-	for _, caseID := range cfg.CaseIDs {
-		if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
-			log.Printf("Error in initial check for case %s: %v", caseID, err)
-			// Check for auth failure - if so, stop everything
-			if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
-				log.Fatalf("Authentication failed, cannot continue")
-			}
-		}
-	}
-
 	// Main loop
 	for {
 		select {
@@ -133,11 +121,6 @@ func checkAndNotifyCase(fetcher CaseStatusFetcher, emailClient *notifier.ResendC
 
 	log.Printf("Case status fetched successfully")
 
-	// Save current state to storage
-	if err := stateStorage.Save(status); err != nil {
-		log.Printf("Warning: Failed to save state: %v", err)
-	}
-
 	// Detect changes
 	changes := uscis.DetectChanges(previousState, status)
 
@@ -163,6 +146,13 @@ func checkAndNotifyCase(fetcher CaseStatusFetcher, emailClient *notifier.ResendC
 		log.Printf("[%s] Change notification email sent successfully", caseID)
 	} else {
 		log.Printf("[%s] No changes detected - skipping email notification", caseID)
+	}
+
+	// Save current state to storage if has first run or has changes
+	if isFirstRun || hasChanges {
+		if err := stateStorage.Save(status); err != nil {
+			log.Printf("Warning: Failed to save state: %v", err)
+		}
 	}
 
 	return nil
