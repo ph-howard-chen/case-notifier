@@ -103,27 +103,6 @@ func Login(username, password string) (string, error) {
 			// when using JavaScript to set value directly, after submitting, the input field gets cleared and error "Secure verification code cannot be blank
 			chromedp.WaitEnabled(`secure-verification-code`, chromedp.ByID),
 			chromedp.SendKeys(`#secure-verification-code`, code, chromedp.ByQuery),
-
-			// chromedp.WaitVisible(`input#secure-verification-code`, chromedp.ByQuery),
-			// chromedp.ActionFunc(func(ctx context.Context) error {
-			// 	// Use JavaScript to set the value and trigger events for form validation
-			// 	jsCode := fmt.Sprintf(`
-			// 		const input = document.getElementById('secure-verification-code');
-			// 		input.value = '%s';
-			// 		input.dispatchEvent(new Event('input', { bubbles: true }));
-			// 		input.dispatchEvent(new Event('change', { bubbles: true }));
-			// 		input.value; // Return the value to verify
-			// 	`, code)
-			// 	var actualValue string
-			// 	if err := chromedp.Evaluate(jsCode, &actualValue).Do(ctx); err != nil {
-			// 		return fmt.Errorf("failed to set verification code: %w", err)
-			// 	}
-			// 	if actualValue != code {
-			// 		return fmt.Errorf("verification code mismatch: expected '%s', got '%s'", code, actualValue)
-			// 	}
-			// 	log.Printf("Verification code set and confirmed: %s", actualValue)
-			// 	return nil
-			// }),
 			chromedp.FullScreenshot(&screenshotBuf, 90), // Screenshot BEFORE clicking
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				if err := os.WriteFile(fmt.Sprintf("before_2fa_submit_%s.png", time.Now().Format("2006-01-02T15-04-05")), screenshotBuf, 0644); err != nil {
