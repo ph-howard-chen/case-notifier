@@ -35,16 +35,14 @@ echo "  Recipient: $RECIPIENT_EMAIL"
 echo "  Poll Interval: ${POLL_INTERVAL:-5m}"
 echo ""
 
-# Build the tracker if not already built
-if [ ! -f "./tracker" ] || [ "./cmd/tracker/main.go" -nt "./tracker" ]; then
-    echo "Building tracker..."
-    go build -o tracker ./cmd/tracker
-    if [ $? -ne 0 ]; then
-        echo "Error: Build failed"
-        exit 1
-    fi
-    echo "Build successful"
+# Always rebuild the tracker
+echo "Building tracker..."
+go build -o tracker ./cmd/tracker
+if [ $? -ne 0 ]; then
+    echo "Error: Build failed"
+    exit 1
 fi
+echo "Build successful"
 
 # Run the tracker
 ./tracker

@@ -386,127 +386,80 @@ This proves your chromedp browser successfully solved the AWS WAF JavaScript cha
 
 ## Phase 6: Add 2FA Support
 
+**Key Discovery:** After login, USCIS redirects to `https://myaccount.uscis.gov/auth` when 2FA is required. Use URL detection (`/auth` in URL) to determine if 2FA verification is needed.
+
 ### 25. Email IMAP Client
 **File:** `internal/email/imap.go`
-- Create new package `internal/email/` for fetching 2FA codes
-- `NewIMAPClient(server, username, password string) *IMAPClient`
-  - Constructor for IMAP client
-  - Store connection details
-- `Connect() error`
+- Create new package `internal/email/` for fetching 2FA codes from email
+- `NewIMAPClient(server, username, password string) (*IMAPClient, error)`
   - Connect to IMAP server with TLS
-  - Login to email account
-  - Select INBOX
+  - Support Gmail, Outlook, Yahoo, and other standard IMAP providers
 - `FetchLatest2FACode(senderEmail string, maxWaitTime time.Duration) (string, error)`
-  - Search for recent emails from specific sender (last 5 minutes)
-  - Wait up to `maxWaitTime` for email to arrive (polling with backoff)
-  - Parse email body (handle both plain text and HTML)
-  - Extract 6-digit verification code using regex: `(\d{6})`
+  - Search INBOX for recent emails from specific sender (last 5 minutes)
+  - Poll every 10 seconds until email arrives or timeout
+  - Parse email body and extract 6-digit code using regex
   - Return code or timeout error
-- `Close() error`
-  - Disconnect from IMAP server
-- Support Gmail, Outlook, Yahoo, and other IMAP providers
-- Dependencies: Add `github.com/emersion/go-imap/v2` to go.mod and WORKSPACE
+- `Close() error` - Disconnect from IMAP server
+- **Dependencies:** Add `github.com/emersion/go-imap/v2` to go.mod
 
-### 26. Update USCIS Authentication for 2FA
+### 26. Update USCIS Authentication for 2FA Detection
 **Update:** `internal/uscis/auth.go`
-- Update `Login(username, password string, imapClient *email.IMAPClient) (string, error)`
-  - Add optional `imapClient` parameter (can be nil for no 2FA)
-  - If 2FA detected and imapClient is nil, return error
-- Add `detect2FARequired(resp *http.Response) bool`
-  - Check response for 2FA challenge indicators
-  - Look for redirect to 2FA page or specific response body markers
-  - Return true if 2FA is required
-- Add `submit2FACode(code string, cookies []*http.Cookie) (*http.Response, []*http.Cookie, error)`
-  - Submit verification code to 2FA endpoint
-  - Use cookies from initial login
-  - Return updated response and cookies
-- Update login flow:
-  1. Submit username/password
-  2. Check if 2FA required
-  3. If yes and imapClient provided:
-     - Fetch code from email
-     - Submit code
-     - Extract final session cookie
-  4. If yes but no imapClient:
-     - Return error with helpful message
-  5. If no, extract session cookie directly
+- Add constant: `twoFAPageURL = "https://myaccount.uscis.gov/auth"`
+- Update `Login()` signature to accept optional `imapClient` parameter
+- **2FA Detection Logic:**
+  1. After clicking Sign In, wait 10 seconds for AWS WAF + login processing
+  2. Check current URL - if contains `/auth` → 2FA required
+  3. If 2FA not required → extract cookie and return (done)
+- **2FA Handling Logic:**
+  1. If 2FA required but no imapClient provided → return error
+  2. Fetch verification code from email via IMAP
+  3. Find verification input field in browser and submit code
+  4. Wait for verification to complete
+  5. Extract fully authenticated cookie
+- **Important:** 10-second sleep is necessary because checking for `aws-waf-token` cookie alone is insufficient - it appears early but doesn't mean login is complete
 
 ### 27. Update Configuration for 2FA
 **Update:** `internal/config/config.go`
-- Add email-related fields to `Config` struct:
-  - `EmailIMAPServer string` - IMAP server:port (e.g., imap.gmail.com:993)
-  - `EmailUsername string` - Email account for receiving 2FA
-  - `EmailPassword string` - Email app password
-  - `Email2FASender string` - Sender address of 2FA emails
-  - `Email2FATimeout time.Duration` - Max wait time for 2FA code (default: 5 minutes)
-- Parse new environment variables:
-  - `EMAIL_IMAP_SERVER` - IMAP server:port
-  - `EMAIL_USERNAME` - Email account
-  - `EMAIL_PASSWORD` - Email app password (NOT main password)
-  - `EMAIL_2FA_SENDER` - Sender address (e.g., noreply@uscis.gov)
-  - `EMAIL_2FA_TIMEOUT` - Optional, defaults to 5m
-- Validation logic:
-  - If `AUTO_LOGIN=true`, email fields are optional
-  - If email fields are set, validate all are present
-  - Log whether 2FA support is enabled or not
+- Add email-related fields to `Config` struct: `EmailIMAPServer`, `EmailUsername`, `EmailPassword`, `Email2FASender`, `Email2FATimeout`
+- Parse environment variables: `EMAIL_IMAP_SERVER`, `EMAIL_USERNAME`, `EMAIL_PASSWORD`, `EMAIL_2FA_SENDER`, `EMAIL_2FA_TIMEOUT`
+- Validation: If any email field is set, require all email fields to be present
+- Email settings are optional (for accounts without 2FA or manual cookie mode)
 
 ### 28. Update USCIS Client for 2FA
 **Update:** `internal/uscis/client.go`
-- Update `NewClientWithAutoLogin(username, password string, imapClient *email.IMAPClient) (*Client, error)`
-  - Accept optional `imapClient` parameter (can be nil)
-  - Pass to `auth.Login()`
-  - Store imapClient reference for refresh
-- Update `RefreshSession()` to use stored imapClient if available
-- Add field: `imapClient *email.IMAPClient`
+- Update `NewClientWithAutoLogin()` to accept optional `imapClient` parameter
+- Store `imapClient` in Client struct for session refresh
+- Pass `imapClient` to `auth.Login()`
+- Update `RefreshSession()` to use stored imapClient
 
 ### 29. Update Main Application for 2FA
 **Update:** `cmd/tracker/main.go`
-- When `cfg.AutoLogin=true`, check if email settings are configured
-- If email settings present:
-  - Create `email.NewIMAPClient()` with email credentials
+- If `AUTO_LOGIN=true` and email settings configured:
+  - Create `email.IMAPClient` with credentials
   - Pass to `NewClientWithAutoLogin()`
-  - Log: "Auto-login mode with 2FA support enabled"
-- If email settings absent:
+  - Log: "2FA support enabled"
+- If email settings not configured:
   - Pass nil for imapClient
-  - Log: "Auto-login mode without 2FA support (add email settings if needed)"
-- Handle 2FA-related errors gracefully with helpful messages
+  - Log: "2FA not configured"
+- Handle 2FA errors gracefully
 
 ### 30. Update Configuration Examples
 **Update:** `.env.example`
-- Add email section to auto-login mode
-- Document app password setup for Gmail/Outlook
-- Example:
-```bash
-# Auto-Login Mode (AUTO_LOGIN=true)
-USCIS_USERNAME=your_username
-USCIS_PASSWORD=your_password
-
-# Email IMAP Settings (Optional - for 2FA support)
-# For Gmail: Enable IMAP and create app password at https://myaccount.google.com/apppasswords
-# For Outlook: Enable IMAP and use account password or app password
-EMAIL_IMAP_SERVER=imap.gmail.com:993
-EMAIL_USERNAME=your_email@gmail.com
-EMAIL_PASSWORD=your_app_password
-EMAIL_2FA_SENDER=noreply@uscis.gov
-EMAIL_2FA_TIMEOUT=5m
-```
+- Add email configuration section for 2FA support
+- Document Gmail app password setup instructions
+- Mark email fields as optional
+- Example fields: `EMAIL_IMAP_SERVER`, `EMAIL_USERNAME`, `EMAIL_PASSWORD`, `EMAIL_2FA_SENDER`, `EMAIL_2FA_TIMEOUT`
 
 ### 31. Dependencies and Build
 - Add `github.com/emersion/go-imap/v2` to go.mod
-- Add corresponding `go_repository` to WORKSPACE
-- Run `gazelle` to update BUILD.bazel files
-- May need additional dependencies: go-message, go-sasl
+- Run `go mod tidy` and `go mod vendor`
+- Update Bazel WORKSPACE if needed
 
 ### 32. Testing 2FA Flow
-**Files:** `internal/email/imap_test.go`, `internal/uscis/auth_test.go`
-- Unit tests with mocked IMAP server responses
-- Unit tests with mocked HTTP responses for 2FA flow
-- Test 2FA detection logic
-- Test 2FA code parsing from email body (various formats)
-- Test timeout handling if code doesn't arrive
-- Test end-to-end flow with mocked services
-- Integration test with real email account (if available)
-- Manual testing with real USCIS account requiring 2FA
+- Unit tests: IMAP client, 2FA detection, code parsing
+- Integration tests: End-to-end with mocked IMAP server
+- Manual testing: Real USCIS account with 2FA enabled
+- Verify final cookie works for case status API (no 401 errors)
 
 ---
 
