@@ -23,7 +23,7 @@ type CaseStatusFetcher interface {
 }
 
 func main() {
-	log.Println("USCIS Case Tracker starting...")
+	log.Printf("USCIS Case Tracker starting...")
 
 	// Load configuration
 	cfg, err := config.Load()
@@ -41,13 +41,12 @@ func main() {
 	var fetcher CaseStatusFetcher
 
 	if cfg.AutoLogin {
-		log.Println("  Authentication: Auto-login mode (chromedp browser)")
-		log.Printf("  Username: %s", cfg.USCISUsername)
-
+		log.Printf("Authentication: Auto-login mode (chromedp browser)")
+		
 		// Check if email 2FA settings are configured
 		var browserClient *uscis.BrowserClient
 		if cfg.EmailIMAPServer != "" && cfg.EmailUsername != "" && cfg.EmailPassword != "" && cfg.Email2FASender != "" {
-			log.Println("  2FA: Automated email fetch enabled")
+			log.Printf("2FA: Automated email fetch enabled")
 			log.Printf("  Email Server: %s", cfg.EmailIMAPServer)
 			log.Printf("  Email Account: %s", cfg.EmailUsername)
 			log.Printf("  2FA Sender: %s", cfg.Email2FASender)
@@ -68,7 +67,7 @@ func main() {
 				log.Fatalf("Failed to create browser client with email 2FA: %v", err)
 			}
 		} else {
-			log.Println("  2FA: Manual stdin input (email settings not configured)")
+			log.Printf("2FA: Manual stdin input (email settings not configured)")
 			// Create browser client without email support (falls back to stdin for 2FA)
 			browserClient, err = uscis.NewBrowserClient(cfg.USCISUsername, cfg.USCISPassword)
 			if err != nil {
@@ -77,10 +76,10 @@ func main() {
 		}
 
 		defer browserClient.Close()
-		log.Println("  Successfully logged in with browser")
+		log.Printf("Successfully logged in with browser")
 		fetcher = browserClient
 	} else {
-		log.Println("  Authentication: Manual cookie mode (HTTP client)")
+		log.Printf("Authentication: Manual cookie mode (HTTP client)")
 		fetcher = uscis.NewClient(cfg.USCISCookie)
 	}
 

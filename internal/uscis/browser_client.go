@@ -27,13 +27,13 @@ const (
 // BrowserClient uses chromedp browser automation for authentication and API access
 // The browser session is kept alive and used for all API calls
 type BrowserClient struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	allocCancel  context.CancelFunc
-	username     string
-	password     string
-	emailClient  EmailFetcher // Optional: for automated 2FA
-	email2FASender string      // Sender email for 2FA emails
+	ctx             context.Context
+	cancel          context.CancelFunc
+	allocCancel     context.CancelFunc
+	username        string
+	password        string
+	emailClient     EmailFetcher  // Optional: for automated 2FA
+	email2FASender  string        // Sender email for 2FA emails
 	email2FATimeout time.Duration // Timeout for waiting for 2FA email
 }
 
@@ -85,7 +85,7 @@ func NewBrowserClientWithEmail(username, password string, emailClient EmailFetch
 
 // login performs the authentication flow with 2FA support
 func (bc *BrowserClient) login() error {
-	log.Println("Starting login automation...")
+	log.Printf("Starting login automation...")
 	var currentURL string
 
 	// Perform login and wait for AWS WAF challenges
@@ -125,13 +125,13 @@ func (bc *BrowserClient) login() error {
 		return fmt.Errorf("failed to load applicant page: %w", err)
 	}
 
-	log.Println("Login completed successfully, browser session ready for API calls")
+	log.Printf("Login completed successfully, browser session ready for API calls")
 	return nil
 }
 
 // handle2FA handles the 2FA flow by fetching code from email or prompting user
 func (bc *BrowserClient) handle2FA() error {
-	log.Println("2FA verification required")
+	log.Printf("2FA verification required")
 
 	var code string
 	var err error
@@ -142,13 +142,13 @@ func (bc *BrowserClient) handle2FA() error {
 		code, err = bc.emailClient.FetchLatest2FACode(bc.email2FASender, bc.email2FATimeout)
 		if err != nil {
 			log.Printf("Failed to fetch 2FA code from email: %v", err)
-			log.Println("Falling back to manual input...")
+			log.Printf("Falling back to manual input...")
 		}
 	}
 
 	// Fall back to manual input if email fetch failed or not configured
 	if code == "" {
-		log.Println("Please check your email for the verification code")
+		log.Printf("Please check your email for the verification code")
 		fmt.Print("Enter 2FA verification code: ")
 		reader := bufio.NewReader(os.Stdin)
 		code, err = reader.ReadString('\n')
@@ -190,14 +190,14 @@ func (bc *BrowserClient) handle2FA() error {
 		return fmt.Errorf("2FA submission failed: %w", err)
 	}
 
-	log.Println("2FA verification completed successfully")
+	log.Printf("2FA verification completed successfully")
 	return nil
 }
 
 // RefreshSession re-authenticates by running the login flow again
 // Useful when the browser session expires during long-running polling
 func (bc *BrowserClient) RefreshSession() error {
-	log.Println("Refreshing browser session...")
+	log.Printf("Refreshing browser session...")
 	return bc.login()
 }
 
@@ -217,13 +217,13 @@ func (bc *BrowserClient) FetchCaseStatus(caseID string) (map[string]interface{},
 
 	// If we detect possible auth failure, try to refresh and retry once
 	if shouldRefresh {
-		log.Println("Possible session expiration detected (null data), attempting to refresh...")
+		log.Printf("Possible session expiration detected (null data), attempting to refresh...")
 
 		if refreshErr := bc.RefreshSession(); refreshErr != nil {
 			return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
 		}
 
-		log.Println("Session refreshed, retrying request...")
+		log.Printf("Session refreshed, retrying request...")
 		result, err = bc.fetchCaseStatusInternal(caseID)
 	}
 
