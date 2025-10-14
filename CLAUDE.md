@@ -201,60 +201,44 @@ STATE_FILE_DIR=/tmp/case-tracker-states/
 
 ---
 
-## Phase 5: Automated Login with Browser Automation (COMPLETED ✅)
+## Phase 5: Automated Login with Browser Automation
 
-**Status:** ✅ Completed with chromedp browser automation and manual 2FA support
-
-### 18. USCIS Browser Client (Replaces auth.go approach)
+### 18. USCIS Browser Client
 **File:** `internal/uscis/browser_client.go`
-
-**Key Architectural Decision:** After discovering that extracted cookies don't work for HTTP requests (USCIS returns 401), we changed approach to **keep the browser session alive** and use it for all API calls.
-
-- `BrowserClient` struct:
-  - Keeps chromedp browser context alive
-  - Stores username/password for session refresh
-  - No cookie extraction - browser session is the credential
-
+- `BrowserClient` struct that keeps Chrome browser session alive
 - `NewBrowserClient(username, password string) (*BrowserClient, error)`
-  - Launches headless Chrome browser
-  - Performs login with AWS WAF challenge handling (10-second wait)
-  - Detects 2FA requirement by checking URL for `/auth`
-  - Prompts user via stdin for 2FA code if needed
+  - Launches headless Chrome using chromedp
+  - Performs login flow (handles AWS WAF challenges automatically)
+  - Detects 2FA requirement by URL check (`/auth` in URL)
+  - Prompts user for 2FA code via stdin
   - Navigates to applicant page to initialize session
-  - Returns client with active browser session
-
-- `FetchCaseStatus(caseID string) (map[string]interface{}, error)`
-  - Navigates browser to API URL: `https://my.uscis.gov/account/case-service/api/cases/{caseID}`
+  - Keeps browser context alive for subsequent API calls
+- `FetchCaseStatus(caseID string)`
+  - Navigates to API URL in browser
   - Extracts JSON from `<pre>` tag
-  - Auto-detects session expiration (`data: null`)
-  - Automatically refreshes session and retries on auth failure
-
-- `RefreshSession() error`
-  - Re-runs entire login flow (including 2FA if needed)
-  - Reuses same browser context
-  - Useful for long-running polling when session expires
-
-- `Close() error`
-  - Cleans up browser resources
+  - Auto-refreshes session if data is null (session expiration)
+- `RefreshSession()` - Re-runs login flow to refresh expired session
+- `Close()` - Cleanup browser resources
+- **Note:** Browser session is the "credential" - extracted cookies don't work in HTTP client
 
 ### 19. HTTP Client for Manual Cookie Mode
 **File:** `internal/uscis/client.go`
-- Simplified to only handle manual cookie mode
-- Removed auto-login methods (now handled by BrowserClient)
 - `NewClient(cookie string) *Client` - for manual cookie mode
 - `FetchCaseStatus(caseID string)` - makes HTTP request with cookie
 - Detects 401 errors and returns `ErrAuthenticationFailed`
+- Simpler and more lightweight than browser mode
 
 ### 20. Configuration for Dual Authentication Modes
 **File:** `internal/config/config.go`
 - `AutoLogin bool` - Enable/disable browser auto-login mode
-- `USCISUsername string` - USCIS account username
-- `USCISPassword string` - USCIS account password
-- `USCISCookie string` - For manual cookie mode
+- `USCISUsername string` - USCIS account username (required if AutoLogin=true)
+- `USCISPassword string` - USCIS account password (required if AutoLogin=true)
+- `USCISCookie string` - For manual cookie mode (required if AutoLogin=false)
 
 Validation logic:
 - If `AUTO_LOGIN=true`, require `USCIS_USERNAME` and `USCIS_PASSWORD`
 - If `AUTO_LOGIN=false`, require `USCIS_COOKIE`
+- Fail fast with clear error messages
 
 ### 21. Main Application with Interface Abstraction
 **File:** `cmd/tracker/main.go`
@@ -263,7 +247,7 @@ Validation logic:
   - `AUTO_LOGIN=true`: Use `BrowserClient` (chromedp)
   - `AUTO_LOGIN=false`: Use `Client` (HTTP with manual cookie)
 - Properly handles browser lifecycle with `defer browserClient.Close()`
-- Removed dead code for `ErrAuthenticationFailed` checks (clients handle internally)
+- Log which authentication mode is active
 
 ### 22. Configuration Examples
 **File:** `.env.example`
@@ -275,21 +259,23 @@ AUTO_LOGIN=false
 USCIS_COOKIE='_myuscis_session_rx=...'
 
 # Browser Auto-Login Mode (AUTO_LOGIN=true)
-# Supports manual 2FA via stdin prompt
+# Note: 2FA requires manual stdin input in Phase 5
 USCIS_USERNAME=your_username
 USCIS_PASSWORD=your_password
 ```
 
 ### 23. Dependencies and Build
 - **chromedp**: `github.com/chromedp/chromedp` v0.14.2
-- **cdproto**: `github.com/chromedp/cdproto` (for network cookie access)
+- **cdproto**: `github.com/chromedp/cdproto` v0.0.0-20250724212937-08a3db8b4327
 - Go version: 1.23.0+
 - Run `gazelle` to update BUILD.bazel files
+- Update WORKSPACE with chromedp dependencies
 
 ### 24. Testing
 **File:** `test_login.go` (standalone e2e test)
 - Tests complete flow: login → 2FA → applicant page → API access
 - Verifies browser session works for API calls
+- Manual testing with real USCIS credentials
 
 ### **Phase 5 Summary: Why Auto-Login Needs a Real Browser**
 
@@ -369,49 +355,102 @@ This proves your chromedp browser successfully solved the AWS WAF JavaScript cha
 
 ---
 
-## Phase 6: 2FA Support (COMPLETED ✅ with Manual stdin approach)
+## Phase 6: Automated 2FA with Email IMAP
 
-**Status:** ✅ 2FA is already implemented in Phase 5 using manual stdin prompts
-
-**Implemented Approach:** Manual 2FA via stdin (simpler, more reliable)
-- Browser detects 2FA page by URL check (`/auth` in URL)
-- Prompts user via stdin: "Enter 2FA verification code:"
-- User manually enters code from email
-- Browser submits code and continues
-- Works reliably without email automation complexity
-
-**Alternative Approach (Not Implemented):** Automated IMAP Email Fetching
-This approach was considered but NOT implemented because:
-- Adds significant complexity (IMAP client, email parsing, timeout handling)
-- Requires email app passwords and IMAP configuration
-- Manual stdin prompt is simpler and works well for local development
-- For production, use manual cookie mode instead
-
-### Future Enhancement: Automated Email 2FA (Optional)
-If automatic 2FA code retrieval is needed in the future:
-
-**File:** `internal/email/imap.go` (to be created)
-- `NewIMAPClient(server, username, password string) (*IMAPClient, error)`
+### 25. Email IMAP Client
+**File:** `internal/email/imap.go`
+- Create new package `internal/email/` for fetching 2FA codes from email
+- `NewIMAPClient(server, username, password string) *IMAPClient`
+  - Constructor for IMAP client
+  - Store connection details (server, username, password)
 - `FetchLatest2FACode(senderEmail string, maxWaitTime time.Duration) (string, error)`
-  - Search INBOX for recent emails
-  - Parse and extract 6-digit verification code
-  - Poll with timeout
-- **Dependencies:** `github.com/emersion/go-imap/v2`
+  - Connect to IMAP server with TLS
+  - Login and select INBOX
+  - Search for recent emails from specific sender (last 5 minutes)
+  - Poll every 5 seconds up to `maxWaitTime` for email to arrive
+  - Fetch email body and parse (handle plain text and HTML)
+  - Extract 6-digit verification code using regex: `\b(\d{6})\b`
+  - Return code or timeout error
+- Support Gmail, Outlook, Yahoo, and other IMAP providers
+- **Dependencies:** `github.com/emersion/go-imap` v1.2.1 (stable version, NOT v2 beta)
 
-**Configuration:** `.env.example`
+### 26. Update Browser Client for Automated 2FA
+**Update:** `internal/uscis/browser_client.go`
+- Add `EmailFetcher` interface for dependency injection:
+  ```go
+  type EmailFetcher interface {
+      FetchLatest2FACode(senderEmail string, maxWaitTime time.Duration) (string, error)
+  }
+  ```
+- Add fields to `BrowserClient`:
+  - `emailClient EmailFetcher` - optional IMAP client
+  - `email2FASender string` - sender email for 2FA
+  - `email2FATimeout time.Duration` - timeout for email fetch
+- `NewBrowserClientWithEmail(username, password string, emailClient EmailFetcher, email2FASender string, email2FATimeout time.Duration)`
+  - Constructor with email support
+- Update `handle2FA()`:
+  - Try automated email fetch first if `emailClient != nil`
+  - If email fetch fails or not configured, fall back to stdin prompt
+  - Submit code to browser after retrieval
+- Keep `NewBrowserClient()` for backward compatibility (calls `NewBrowserClientWithEmail` with nil)
+
+### 27. Update Configuration for Email 2FA
+**Update:** `internal/config/config.go`
+- Add email-related fields to `Config` struct:
+  - `EmailIMAPServer string` - IMAP server:port (e.g., imap.gmail.com:993)
+  - `EmailUsername string` - Email account for receiving 2FA
+  - `EmailPassword string` - Email app password
+  - `Email2FASender string` - Sender address of 2FA emails
+  - `Email2FATimeout time.Duration` - Max wait time for 2FA code (default: 5 minutes)
+- Parse environment variables:
+  - `EMAIL_IMAP_SERVER` - IMAP server:port
+  - `EMAIL_USERNAME` - Email account
+  - `EMAIL_PASSWORD` - Email app password (NOT main password)
+  - `EMAIL_2FA_SENDER` - Sender address (e.g., noreply@uscis.gov)
+  - `EMAIL_2FA_TIMEOUT` - Optional, defaults to 5m
+- Validation: If any email field is set, all must be set (all-or-nothing)
+
+### 28. Update Main Application for Automated 2FA
+**Update:** `cmd/tracker/main.go`
+- When `AUTO_LOGIN=true`, check if email settings are configured
+- If email settings present:
+  - Create `email.NewIMAPClient()` with credentials
+  - Pass to `NewBrowserClientWithEmail()`
+  - Log: "2FA: Automated email fetch enabled"
+- If email settings absent:
+  - Pass nil for imapClient
+  - Log: "2FA: Manual stdin input (email settings not configured)"
+- Handle 2FA-related errors gracefully
+
+### 29. Update Configuration Examples
+**Update:** `.env.example`
+- Add email section with detailed setup instructions
+- Document Gmail app password setup
+- Document Outlook/Yahoo setup
+- Example:
 ```bash
-# Optional: Automated 2FA via email (not implemented)
-# EMAIL_IMAP_SERVER=imap.gmail.com:993
-# EMAIL_USERNAME=your_email@gmail.com
-# EMAIL_PASSWORD=your_app_password
-# EMAIL_2FA_SENDER=noreply@uscis.gov
+# Email 2FA Settings (Optional - for automated 2FA)
+# For Gmail: Enable IMAP and create app password
+EMAIL_IMAP_SERVER=imap.gmail.com:993
+EMAIL_USERNAME=your_email@gmail.com
+EMAIL_PASSWORD=your_app_password
+EMAIL_2FA_SENDER=noreply@uscis.gov
+EMAIL_2FA_TIMEOUT=5m
 ```
 
-**Rationale for Not Implementing:**
-- Manual stdin works well for local development
-- Production deployments should use manual cookie mode
-- IMAP adds complexity without significant benefit
-- Email delivery delays can cause timeout issues
+### 30. Dependencies and Build
+- Add `github.com/emersion/go-imap` v1.2.1 to go.mod
+- Run `go mod tidy && go mod vendor`
+- Update BUILD.bazel files with `gazelle`
+- Create `internal/email/BUILD.bazel`
+
+### 31. Testing
+- Unit tests with mocked IMAP server responses
+- Test 2FA code extraction with various email formats
+- Test timeout handling
+- Test fallback to stdin on email fetch failure
+- Integration test with real Gmail account (if available)
+- End-to-end test with real USCIS account requiring 2FA
 
 ---
 
@@ -591,59 +630,14 @@ Instead of extracting cookies, we:
 
 ---
 
-## Implementation Order
-
-### ✅ COMPLETED
-
-**Milestone 1** (Basic functionality):
-1. ✅ Set up project structure (Phase 1)
-2. ✅ Implement config, USCIS client, Resend client (Phase 2: items 4-6)
-3. ✅ Basic main loop that fetches and emails every 5 minutes (Phase 2: item 7)
-4. ✅ Bazel BUILD files (Phase 2: item 8)
-5. ✅ Test locally with real credentials
-
-**Milestone 2** (Smart notifications):
-6. ✅ Add state storage (Phase 3: item 9)
-7. ✅ Implement change detection (Phase 3: item 10)
-8. ✅ Update main loop for smart notifications (Phase 3: item 11)
-9. ✅ Add 401 error handling (Phase 3: item 12)
-10. ✅ Write unit tests (Phase 3: item 13)
-
-**Milestone 2.5** (Function Enhancement):
-11. ✅ Support multiple case IDs (Phase 4: item 14)
-12. ✅ Enhanced state storage with timestamps (Phase 4: items 15-16)
-13. ✅ Update configuration examples (Phase 4: item 17)
-
-**Milestone 2.75** (Browser Auto-Login with 2FA):
-14. ✅ Implement BrowserClient with chromedp (Phase 5: item 18)
-15. ✅ Add manual 2FA support via stdin (Phase 5 & 6)
-16. ✅ Update configuration for dual auth modes (Phase 5: item 20)
-17. ✅ Create CaseStatusFetcher interface in main (Phase 5: item 21)
-18. ✅ Add session refresh capability (Phase 5: RefreshSession)
-19. ✅ Update .env.example (Phase 5: item 22)
-20. ✅ Add chromedp dependencies and test (Phase 5: items 23-24)
-
-### 🔄 IN PROGRESS / TODO
-
-**Milestone 3** (Production & Open Source):
-- ⏳ Create Dockerfile with Chrome support (Phase 7: item 33)
-- ⏳ Set up Cloud Run deployment (Phase 7: items 34-35)
-- ⏳ Write documentation (Phase 8: items 37-41)
-- ⏳ Add LICENSE and contributing guidelines (Phase 8: items 38-39)
-- ⏳ Update .env.example template (Phase 8: item 40)
-- ⏳ Final testing and release
-
-**Note:** Phase 6 IMAP email 2FA was skipped in favor of simpler manual stdin approach
-
----
-
 ## Dependencies
 
 ### Go Packages
 - `github.com/resend/resend-go` - Resend SDK for email notifications
 - `github.com/chromedp/chromedp` v0.14.2 - Chrome DevTools Protocol for browser automation
 - `github.com/chromedp/cdproto` - CDP protocol definitions
-- Standard library: `net/http`, `encoding/json`, `time`, `os`, `log`, `bufio`, `context`
+- `github.com/emersion/go-imap` v1.2.1 - IMAP client for automated 2FA email fetching
+- Standard library: `net/http`, `encoding/json`, `time`, `os`, `log`, `bufio`, `context`, `regexp`
 
 ### System Requirements
 - **For Auto-Login Mode:** Chrome/Chromium browser (automatically managed by chromedp in headless mode)
@@ -667,13 +661,15 @@ Instead of extracting cookies, we:
 1. **Never commit credentials** - Use .gitignore, document in README
 2. **Cookie/Password storage** - Use environment variables or GCP Secret Manager, never commit to git
 3. **Browser mode credentials** - Username/password stored only in memory during execution
-4. **Session expiration** - BrowserClient auto-refreshes, manual cookie requires user intervention
-5. **API rate limiting** - 5-minute interval is conservative and respectful
-6. **Input validation** - Validate case ID format before making requests
-7. **Secret management** - Use GCP Secret Manager for production deployments
-8. **Minimal permissions** - Cloud Run service account with least privilege
-9. **2FA security** - Manual stdin prompt prevents automated code interception
-10. **Browser automation** - chromedp runs in headless mode, no GUI access required
+4. **Email app passwords** - Require app-specific passwords for IMAP access, not main account passwords
+5. **Session expiration** - BrowserClient auto-refreshes, manual cookie requires user intervention
+6. **API rate limiting** - 5-minute interval is conservative and respectful
+7. **Input validation** - Validate case ID format before making requests
+8. **Secret management** - Use GCP Secret Manager for production deployments
+9. **Minimal permissions** - Cloud Run service account with least privilege
+10. **2FA security** - Automated email fetch with graceful fallback to stdin; configurable timeout
+11. **Browser automation** - chromedp runs in headless mode, no GUI access required
+12. **IMAP security** - Email credentials used only for reading 2FA codes, not sending
 
 ---
 

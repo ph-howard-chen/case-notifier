@@ -1,0 +1,20 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "email",
+    srcs = [
+        "imap.go",
+    ],
+    importpath = "github.com/phhowardchen/case-tracker/internal/email",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@com_github_emersion_go_imap//:go-imap",
+        "@com_github_emersion_go_imap//client",
+    ],
+)
+
+go_test(
+    name = "email_test",
+    srcs = ["imap_test.go"],
+    embed = [":email"],
+)

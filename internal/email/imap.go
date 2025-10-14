@@ -45,7 +45,8 @@ func (c *IMAPClient) FetchLatest2FACode(senderEmail string, maxWaitTime time.Dur
 
 		// If error is not "not found", return it
 		if err != nil && !strings.Contains(err.Error(), "no 2FA email found") {
-			return "", err
+			log.Printf("Error fetching 2FA code, retry...: %v", err)
+			continue
 		}
 
 		// Wait before retrying

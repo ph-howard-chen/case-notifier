@@ -85,3 +85,10 @@ go_repository(
     sum = "h1:iizUGZ9pEquQS5jTGkh4AqeeHCMbfbjeb0zMt0aEFzs=",
     version = "v0.0.0-20250725192818-e39067aee2d2",
 )
+
+go_repository(
+    name = "com_github_emersion_go_imap",
+    importpath = "github.com/emersion/go-imap",
+    sum = "h1:+s9ZjMEjOB8NzZMVTM3cCenz2JrQIGGo5j1df19WjTA=",
+    version = "v1.2.1",
+)

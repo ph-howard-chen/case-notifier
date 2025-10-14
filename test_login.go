@@ -49,7 +49,7 @@ func main_test() {
 	ctx, cancel = chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	log.Println("Starting login automation...")
+	log.Printf("Starting login automation...")
 	var cookies []*network.Cookie
 	var currentURL string
 
@@ -81,7 +81,7 @@ func main_test() {
 
 	// Handle 2FA if required
 	if strings.Contains(currentURL, "/auth") {
-		log.Println("2FA verification required - please check your email for the verification code")
+		log.Printf("2FA verification required - please check your email for the verification code")
 
 		fmt.Print("Enter 2FA verification code: ")
 		reader := bufio.NewReader(os.Stdin)
@@ -91,7 +91,7 @@ func main_test() {
 		}
 		code = strings.TrimSpace(code)
 
-		log.Println("Submitting verification code...")
+		log.Printf("Submitting verification code...")
 		err = chromedp.Run(ctx,
 			chromedp.WaitEnabled(`secure-verification-code`, chromedp.ByID),
 			chromedp.SendKeys(`#secure-verification-code`, code, chromedp.ByQuery),
@@ -119,7 +119,7 @@ func main_test() {
 			log.Fatalf("2FA submission failed: %v", err)
 		}
 
-		log.Println("2FA verification completed successfully")
+		log.Printf("2FA verification completed successfully")
 	}
 
 	// Navigate to applicant page to initialize session for API access
@@ -130,11 +130,11 @@ func main_test() {
 	if err != nil {
 		log.Fatalf("Failed to load applicant page: %v", err)
 	} else {
-		log.Println("Applicant page loaded successfully")
+		log.Printf("Applicant page loaded successfully")
 	}
 
 	// Now try API access
-	log.Println("Testing API access using browser session...")
+	log.Printf("Testing API access using browser session...")
 	testCaseID := "IOE0933798378"
 	var apiResponse string
 	err = chromedp.Run(ctx,
@@ -150,11 +150,11 @@ func main_test() {
 		log.Fatalf("Failed to access API: %v", err)
 	}
 
-	log.Println("\n=== API ACCESS SUCCESSFUL ===")
+	log.Printf("\n=== API ACCESS SUCCESSFUL ===")
 	log.Printf("API response:\n%s\n", apiResponse)
 
 	// Extract and display cookie
-	log.Println("\n=== COOKIES ===")
+	log.Printf("\n=== COOKIES ===")
 	cookieNames := []string{"_uscis_user_session", "_myuscis_session_rx"}
 	for _, cookieName := range cookieNames {
 		for _, cookie := range cookies {

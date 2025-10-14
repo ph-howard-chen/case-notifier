@@ -22,7 +22,7 @@ func main() {
 	email2FATimeout := os.Getenv("EMAIL_2FA_TIMEOUT")
 
 	if emailIMAPServer != "" && emailUsername != "" && emailPassword != "" && email2FASender != "" && email2FATimeout != "" {
-		log.Println("  2FA: Automated email fetch enabled")
+		log.Printf("2FA: Automated email fetch enabled")
 		log.Printf("  Email Server: %s", emailIMAPServer)
 		log.Printf("  Email Account: %s", emailUsername)
 	}
@@ -32,7 +32,7 @@ func main() {
 	log.Printf("Fetching 2FA code from email (sender: %s)...", email2FASender)
 	timeout, err := time.ParseDuration(email2FATimeout)
 	if err != nil {
-		log.Fatalf("invalid EMAIL_2FA_TIMEOUT: %w", err)
+		log.Fatalf("invalid EMAIL_2FA_TIMEOUT: %v", err)
 	}
 	code, err := imapClient.FetchLatest2FACode(email2FASender, timeout)
 	if err != nil {
