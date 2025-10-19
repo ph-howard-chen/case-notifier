@@ -62,5 +62,4 @@ tracker
 
 # Cloud deployment
 .gcloudignore
-cloud-run.yaml
-cloud-run-deploy.yaml
+cloud-run-deploy.yaml  # Temporary file with secrets, should not be committed

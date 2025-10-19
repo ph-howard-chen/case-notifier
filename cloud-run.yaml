@@ -1,0 +1,106 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: uscis-case-tracker
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/ingress: internal
+spec:
+  template:
+    metadata:
+      annotations:
+        # Scaling configuration
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "1" # Only need one instance
+        # CPU allocation
+        run.googleapis.com/cpu-throttling: "true"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      # Use default service account or create custom one with minimal permissions
+      serviceAccountName: default
+
+      # Timeout for each request (not really applicable for worker, but required)
+      timeoutSeconds: 3600
+
+      containers:
+        - name: tracker
+          # Image will be replaced by deploy_prod.sh
+          image: IMAGE_PLACEHOLDER
+
+          # Resource limits for browser automation
+          resources:
+            limits:
+              memory: 1Gi
+              cpu: "1"
+
+          # Startup probe - give enough time for browser initialization
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 20  # 20 * 5s = 100s total startup time
+
+          # Liveness probe - check if service is still running
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Environment variables
+          env:
+            # Required: Case IDs to monitor (comma-separated)
+            - name: CASE_IDS
+              value: "CASE_IDS_PLACEHOLDER"
+
+            # Required: Resend API key for email notifications
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: resend-api-key
+                  key: latest
+
+            # Required: Email to receive notifications
+            - name: RECIPIENT_EMAIL
+              value: "RECIPIENT_EMAIL_PLACEHOLDER"
+
+            # Optional: Poll interval (default: 10m)
+            - name: POLL_INTERVAL
+              value: "15m"
+
+            # Optional: State directory (default: /tmp/case-tracker-states/)
+            - name: STATE_FILE_DIR
+              value: "/tmp/case-tracker-states/"
+
+            # Browser Auto-Login Mode (production)
+            - name: AUTO_LOGIN
+              value: "true"
+            - name: USCIS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: uscis-username
+                  key: latest
+            - name: USCIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: uscis-password
+                  key: latest
+
+            # Email 2FA (required for auto-login)
+            # Note: EMAIL_2FA_SENDER and EMAIL_2FA_TIMEOUT are hardcoded in the application
+            # Defaults: MyAccount@uscis.dhs.gov, 10m
+            - name: EMAIL_IMAP_SERVER
+              value: "EMAIL_IMAP_SERVER_PLACEHOLDER"
+            - name: EMAIL_USERNAME
+              value: "EMAIL_USERNAME_PLACEHOLDER"
+            - name: EMAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: email-app-password
+                  key: latest
