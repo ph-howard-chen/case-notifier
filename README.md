@@ -329,11 +329,13 @@ If you see login failure in the logs, the service automatically exits to prevent
 
 ```bash
 # Check container status
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+gcloud compute ssh $GCE_INSTANCE_NAME --zone=$GCE_ZONE \
+  --project=$GCP_PROJECT_ID \
   --command='sudo docker ps -a --filter name=uscis-tracker'
 
 # View logs to see the error
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+gcloud compute ssh $GCE_INSTANCE_NAME --zone=$GCE_ZONE \
+  --project=$GCP_PROJECT_ID \
   --command='sudo docker logs --tail=50 uscis-tracker'
 ```
 
@@ -348,13 +350,13 @@ gcloud compute ssh your-vm-name --zone=your-gcp-zone \
 - Prevents repeated failed login attempts that could lock your USCIS account
 
 **To retry after fixing credentials:**
-1. Update secrets in Secret Manager: `echo -n "new_password" | gcloud secrets versions add uscis-password --data-file=- --project=your-gcp-project-id`
+1. Update secrets in Secret Manager: `gcloud secrets versions add uscis-password --data-file=- --project=$GCP_PROJECT_ID`
 2. Redeploy: `./deploy_gce.sh` (automatically uses new credentials)
 
 **Problem: Docker not installed on VM**
 ```bash
 # SSH into VM and install Docker manually
-gcloud compute ssh your-vm-name --zone=your-gcp-zone
+gcloud compute ssh $GCE_INSTANCE_NAME --zone=$GCE_ZONE --project=$GCP_PROJECT_ID
 sudo apt-get update && sudo apt-get install -y docker.io
 sudo systemctl start docker
 sudo systemctl enable docker
@@ -363,24 +365,32 @@ sudo systemctl enable docker
 **Problem: Container won't start**
 ```bash
 # Check Docker logs
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+gcloud compute ssh $GCE_INSTANCE_NAME --zone=$GCE_ZONE \
+  --project=$GCP_PROJECT_ID \
   --command='sudo docker logs uscis-tracker'
 
 # Check if container is running
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+gcloud compute ssh $GCE_INSTANCE_NAME --zone=$GCE_ZONE \
+  --project=$GCP_PROJECT_ID \
   --command='sudo docker ps -a'
 ```
 
 **Problem: Can't pull image from Artifact Registry**
 ```bash
 # Configure Docker authentication on VM
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
-  --command='gcloud auth configure-docker us-central1-docker.pkg.dev --quiet'
+gcloud compute ssh $GCE_INSTANCE_NAME --zone=$GCE_ZONE \
+  --project=$GCP_PROJECT_ID \
+  --command="gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev --quiet"
 ```
 
 **Problem: Secret Manager access denied**
-
-See "Step 2: Create Secrets in Secret Manager"
+```bash
+# Grant permissions to VM service account
+PROJECT_NUMBER=$(gcloud projects describe $GCP_PROJECT_ID --format="value(projectNumber)")
+gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
 
 **Problem: Memory Issues (Auto-login mode)**
 
@@ -388,15 +398,16 @@ Upgrade to a larger instance type (but this loses free tier):
 
 ```bash
 # Stop the instance first
-gcloud compute instances stop your-vm-name --zone=your-gcp-zone
+gcloud compute instances stop $GCE_INSTANCE_NAME --zone=$GCE_ZONE --project=$GCP_PROJECT_ID
 
 # Change machine type
-gcloud compute instances set-machine-type your-vm-name \
+gcloud compute instances set-machine-type $GCE_INSTANCE_NAME \
   --machine-type=e2-small \
-  --zone=your-gcp-zone
+  --zone=$GCE_ZONE \
+  --project=$GCP_PROJECT_ID
 
 # Start the instance
-gcloud compute instances start your-vm-name --zone=your-gcp-zone
+gcloud compute instances start $GCE_INSTANCE_NAME --zone=$GCE_ZONE --project=$GCP_PROJECT_ID
 ```
 
 **Note**: e2-small is NOT free tier. Consider optimizing your application instead.
