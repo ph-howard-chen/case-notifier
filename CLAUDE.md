@@ -700,15 +700,13 @@ Instead of extracting cookies, we:
 ---
 
 ## Future Enhancements (Post-Milestone 3)
-
+- Database or storage backend for state (PostgreSQL/Firestore/GCS)
+- GPT API to summarize human-readable resut
+- Daily digest even no change
 - Web UI for configuration (no need to redeploy)
-- Database backend for state (PostgreSQL/Firestore)
-- SMS notifications via Twilio
-- Prometheus metrics export
-- Slack/Discord notification options
-- State file cleanup/retention policy (e.g., keep last 30 days)
-- Automated IMAP email 2FA (if stdin prompts become limiting)
 - Playwright/Puppeteer as alternative to chromedp
+- More notification options: SMS via Twilio
+- Prometheus metrics export
 
 ---
 
