@@ -405,9 +405,15 @@ gcloud run services update-traffic uscis-case-tracker \
 **Cons:**
 - ❌ NOT free (~$5-10/month with min-instances=1)
 - ❌ Less control than VM
-- ❌ Cold starts if min-instances=0
+- ❌ Cannot use min-instances=0 (would stop polling)
 
-**Note**: Deleting the service stops all instances and billing. You can redeploy anytime with `./deploy_prod.sh`.
+**Important**: The tracker requires `min-instances=1` in `cloud-run.yaml` because:
+- It's a worker service that needs to run continuously
+- It uses a `time.Ticker` to poll USCIS every 5 minutes
+- If Cloud Run scales to 0, the container shuts down and polling stops
+- Setting min-instances=0 would break the entire service
+
+**Note**: Deleting the service stops all instances and billing. You can redeploy anytime with `./deploy_cloud_run.sh`.
 
 ---
 
@@ -465,7 +471,10 @@ gcloud run services update-traffic uscis-case-tracker \
 - Completely FREE if you stay within limits!
 
 **Cloud Run (~$5-10/month):**
-- Use **min-instances=0** in `cloud-run.yaml` (pay per poll, 2-3s cold start)
+- **min-instances=1** is REQUIRED in `cloud-run.yaml` to keep the polling service alive
+  - Setting to 0 would shut down the container between requests
+  - Your tracker needs to run continuously to poll USCIS every 5 minutes
+  - If it shuts down, polling stops and notifications won't work
 - Use **1Gi memory** for browser automation (required for Chromium)
 - Adjust `POLL_INTERVAL` to reduce costs (e.g., 15m instead of 5m)
 
