@@ -30,20 +30,22 @@ func NewIMAPClient(server, username, password string) *IMAPClient {
 
 // FetchLatest2FACode fetches the latest 2FA verification code from email
 // Polls the inbox until a code is found or timeout is reached
+// The senderEmail parameter is kept for interface compatibility but not used -
+// we search for USCIS emails by checking sender/subject keywords instead
 func (c *IMAPClient) FetchLatest2FACode(senderEmail string, maxWaitTime time.Duration) (string, error) {
 	deadline := time.Now().Add(maxWaitTime)
 	pollInterval := 5 * time.Second
 
-	log.Printf("Waiting for 2FA email from %s (timeout: %v)...", senderEmail, maxWaitTime)
+	log.Printf("Waiting for 2FA email (timeout: %v)...", maxWaitTime)
 
 	for time.Now().Before(deadline) {
-		code, err := c.tryFetchCode(senderEmail)
+		code, err := c.tryFetchCode()
 		if err == nil && code != "" {
 			log.Printf("Successfully retrieved 2FA code: %s", code)
 			return code, nil
 		}
 
-		// If error is not "not found", return it
+		// If error is not "not found", log and retry
 		if err != nil && !strings.Contains(err.Error(), "no 2FA email found") {
 			log.Printf("Error fetching 2FA code, retry...: %v", err)
 			continue
@@ -62,7 +64,7 @@ func (c *IMAPClient) FetchLatest2FACode(senderEmail string, maxWaitTime time.Dur
 }
 
 // tryFetchCode attempts to fetch a 2FA code from recent emails
-func (c *IMAPClient) tryFetchCode(senderEmail string) (string, error) {
+func (c *IMAPClient) tryFetchCode() (string, error) {
 	// Connect to IMAP server
 	imapClient, err := client.DialTLS(c.server, nil)
 	if err != nil {
@@ -76,72 +78,98 @@ func (c *IMAPClient) tryFetchCode(senderEmail string) (string, error) {
 	}
 
 	// Select INBOX
-	_, err = imapClient.Select("INBOX", false)
+	mbox, err := imapClient.Select("INBOX", false)
 	if err != nil {
 		return "", fmt.Errorf("failed to select INBOX: %w", err)
 	}
 
-	// Search for recent emails from sender (last 5 minutes)
-	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
-	criteria := imap.NewSearchCriteria()
-	criteria.SentSince = fiveMinutesAgo
-	criteria.Header.Add("FROM", senderEmail)
-
-	uids, err := imapClient.Search(criteria)
-	if err != nil {
-		return "", fmt.Errorf("failed to search emails: %w", err)
+	// Get the last 50 messages (more reliable than time-based search)
+	maxToCheck := uint32(50)
+	if mbox.Messages < maxToCheck {
+		maxToCheck = mbox.Messages
 	}
 
-	if len(uids) == 0 {
-		return "", fmt.Errorf("no 2FA email found from %s in last 5 minutes", senderEmail)
+	if maxToCheck == 0 {
+		return "", fmt.Errorf("no emails in INBOX")
 	}
 
-	// Get the most recent email (last UID)
-	latestUID := uids[len(uids)-1]
+	firstUID := mbox.Messages - maxToCheck + 1
+	lastUID := mbox.Messages
 
-	// Fetch the email body
 	seqSet := new(imap.SeqSet)
-	seqSet.AddNum(latestUID)
+	seqSet.AddRange(firstUID, lastUID)
 
-	messages := make(chan *imap.Message, 1)
-	section := &imap.BodySectionName{}
-	items := []imap.FetchItem{section.FetchItem()}
-
+	// Fetch email headers and body for these messages
+	messages := make(chan *imap.Message, maxToCheck)
 	done := make(chan error, 1)
+
+	items := []imap.FetchItem{
+		imap.FetchEnvelope,
+		(&imap.BodySectionName{}).FetchItem(),
+	}
+
 	go func() {
 		done <- imapClient.Fetch(seqSet, items, messages)
 	}()
 
-	// Wait for message
-	msg := <-messages
-	if msg == nil {
-		return "", fmt.Errorf("failed to fetch email message")
+	// Collect all messages
+	var allMessages []*imap.Message
+	for msg := range messages {
+		if msg != nil {
+			allMessages = append(allMessages, msg)
+		}
 	}
 
-	// Wait for fetch to complete
 	if err := <-done; err != nil {
 		return "", fmt.Errorf("fetch error: %w", err)
 	}
 
-	// Read the message body
-	literal := msg.GetBody(section)
-	if literal == nil {
-		return "", fmt.Errorf("email body is empty")
+	// Check messages from most recent to oldest
+	for i := len(allMessages) - 1; i >= 0; i-- {
+		msg := allMessages[i]
+		if msg == nil {
+			continue
+		}
+
+		// Check if this is a USCIS email by sender/subject
+		if msg.Envelope != nil {
+			var fromAddr string
+			if len(msg.Envelope.From) > 0 {
+				fromAddr = msg.Envelope.From[0].Address()
+			}
+			subject := msg.Envelope.Subject
+
+			// Check if this is from USCIS (flexible matching)
+			isUSCIS := strings.Contains(strings.ToLower(fromAddr), "uscis") ||
+				strings.Contains(strings.ToLower(subject), "verification") ||
+				strings.Contains(strings.ToLower(subject), "myaccount") ||
+				strings.Contains(strings.ToLower(subject), "secure")
+
+			if !isUSCIS {
+				continue
+			}
+
+			// Found a USCIS email, try to extract code
+			section := &imap.BodySectionName{}
+			literal := msg.GetBody(section)
+			if literal == nil {
+				continue
+			}
+
+			bodyBytes, err := io.ReadAll(literal)
+			if err != nil {
+				continue
+			}
+
+			code, err := extract2FACode(string(bodyBytes))
+			if err == nil {
+				log.Printf("Found 2FA code from: %s", fromAddr)
+				return code, nil
+			}
+		}
 	}
 
-	bodyBytes, err := io.ReadAll(literal)
-	if err != nil {
-		return "", fmt.Errorf("failed to read email body: %w", err)
-	}
-	bodyText := string(bodyBytes)
-
-	// Extract 6-digit code from email body
-	code, err := extract2FACode(bodyText)
-	if err != nil {
-		return "", fmt.Errorf("failed to extract 2FA code from email: %w", err)
-	}
-
-	return code, nil
+	return "", fmt.Errorf("no 2FA email found from USCIS in last %d emails", maxToCheck)
 }
 
 // extract2FACode extracts a 6-digit verification code from email text

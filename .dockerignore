@@ -1,0 +1,45 @@
+# Git files
+.git
+.gitignore
+.github
+
+# Bazel build artifacts
+bazel-*
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+tracker
+test_login
+test_imap
+*.out
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# State files
+*.json
+
+# Logs
+*.log
+
+# Documentation (not needed in container)
+CLAUDE.md
+
+# Test files
+*_test.go
+test_*.go
+
+# Deployment files
+deploy_prod.sh
+cloudbuild.yaml

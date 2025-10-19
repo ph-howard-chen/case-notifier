@@ -56,3 +56,10 @@ Thumbs.db
 
 *.png
 tracker
+
+# Docker
+.dockerignore.bak
+
+# Cloud deployment
+.gcloudignore
+cloud-run-deploy.yaml  # Temporary file with secrets, should not be committed

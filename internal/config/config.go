@@ -22,11 +22,9 @@ type Config struct {
 	USCISPassword string
 
 	// Email 2FA configuration (optional - for automated 2FA)
-	EmailIMAPServer  string
-	EmailUsername    string
-	EmailPassword    string
-	Email2FASender   string
-	Email2FATimeout  time.Duration
+	EmailIMAPServer string
+	EmailUsername   string
+	EmailPassword   string
 }
 
 // Load loads configuration from environment variables (multi-case aware)
@@ -40,7 +38,6 @@ func Load() (*Config, error) {
 		EmailIMAPServer: os.Getenv("EMAIL_IMAP_SERVER"),
 		EmailUsername:   os.Getenv("EMAIL_USERNAME"),
 		EmailPassword:   os.Getenv("EMAIL_PASSWORD"),
-		Email2FASender:  os.Getenv("EMAIL_2FA_SENDER"),
 	}
 
 	// Parse AUTO_LOGIN flag
@@ -94,7 +91,7 @@ func Load() (*Config, error) {
 	// Parse poll interval with default
 	pollIntervalStr := os.Getenv("POLL_INTERVAL")
 	if pollIntervalStr == "" {
-		cfg.PollInterval = 5 * time.Minute
+		cfg.PollInterval = 15 * time.Minute
 	} else {
 		interval, err := time.ParseDuration(pollIntervalStr)
 		if err != nil {
@@ -103,24 +100,11 @@ func Load() (*Config, error) {
 		cfg.PollInterval = interval
 	}
 
-	// Parse email 2FA timeout with default
-	email2FATimeoutStr := os.Getenv("EMAIL_2FA_TIMEOUT")
-	if email2FATimeoutStr == "" {
-		cfg.Email2FATimeout = 5 * time.Minute
-	} else {
-		timeout, err := time.ParseDuration(email2FATimeoutStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid EMAIL_2FA_TIMEOUT: %w", err)
-		}
-		cfg.Email2FATimeout = timeout
-	}
-
-	// Validate email settings if any are provided
+	// Validate email settings if any are provided (all-or-nothing)
 	emailFieldsSet := []bool{
 		cfg.EmailIMAPServer != "",
 		cfg.EmailUsername != "",
 		cfg.EmailPassword != "",
-		cfg.Email2FASender != "",
 	}
 	someEmailFieldsSet := false
 	allEmailFieldsSet := true
@@ -134,7 +118,7 @@ func Load() (*Config, error) {
 
 	// If any email field is set, all must be set
 	if someEmailFieldsSet && !allEmailFieldsSet {
-		return nil, fmt.Errorf("if any email settings are provided, all of EMAIL_IMAP_SERVER, EMAIL_USERNAME, EMAIL_PASSWORD, and EMAIL_2FA_SENDER must be set")
+		return nil, fmt.Errorf("if any email settings are provided, all of EMAIL_IMAP_SERVER, EMAIL_USERNAME, and EMAIL_PASSWORD must be set")
 	}
 
 	return cfg, nil

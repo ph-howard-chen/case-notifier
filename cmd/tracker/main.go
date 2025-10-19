@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -37,41 +38,81 @@ func main() {
 	log.Printf("  Poll Interval: %v", cfg.PollInterval)
 	log.Printf("  State Directory: %s", cfg.StateFileDir)
 
+	// Start HTTP health check server for Cloud Run
+	// Cloud Run requires services to listen on PORT (default 8080)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	go func() {
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "USCIS Case Tracker is running")
+		})
+
+		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "OK")
+		})
+
+		log.Printf("Starting HTTP health check server on port %s", port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
+	}()
+
 	// Initialize USCIS client based on authentication mode
 	var fetcher CaseStatusFetcher
 
 	if cfg.AutoLogin {
 		log.Printf("Authentication: Auto-login mode (chromedp browser)")
-		
+
 		// Check if email 2FA settings are configured
 		var browserClient *uscis.BrowserClient
-		if cfg.EmailIMAPServer != "" && cfg.EmailUsername != "" && cfg.EmailPassword != "" && cfg.Email2FASender != "" {
+		if cfg.EmailIMAPServer != "" && cfg.EmailUsername != "" && cfg.EmailPassword != "" {
 			log.Printf("2FA: Automated email fetch enabled")
 			log.Printf("  Email Server: %s", cfg.EmailIMAPServer)
 			log.Printf("  Email Account: %s", cfg.EmailUsername)
-			log.Printf("  2FA Sender: %s", cfg.Email2FASender)
-			log.Printf("  2FA Timeout: %v", cfg.Email2FATimeout)
+			log.Printf("  2FA Sender: MyAccount@uscis.dhs.gov (hardcoded)")
+			log.Printf("  2FA Timeout: 10m (hardcoded)")
 
 			// Create IMAP client for automated 2FA
 			imapClient := email.NewIMAPClient(cfg.EmailIMAPServer, cfg.EmailUsername, cfg.EmailPassword)
 
-			// Create browser client with email support
+			// Create browser client with email support (hardcoded 2FA settings)
 			browserClient, err = uscis.NewBrowserClientWithEmail(
 				cfg.USCISUsername,
 				cfg.USCISPassword,
 				imapClient,
-				cfg.Email2FASender,
-				cfg.Email2FATimeout,
+				"MyAccount@uscis.dhs.gov", // Hardcoded 2FA sender
+				10*time.Minute,            // Hardcoded 2FA timeout
 			)
 			if err != nil {
-				log.Fatalf("Failed to create browser client with email 2FA: %v", err)
+				log.Printf("CRITICAL: Failed to create browser client: %v", err)
+				log.Printf("This could indicate:")
+				log.Printf("  - Incorrect USCIS username or password")
+				log.Printf("  - Account locked due to too many failed attempts")
+				log.Printf("  - USCIS website issues")
+				log.Printf("")
+				log.Printf("Exiting to prevent account lockout from repeated failed login attempts.")
+				log.Printf("Fix credentials and redeploy to retry.")
+				os.Exit(1)
 			}
 		} else {
 			log.Printf("2FA: Manual stdin input (email settings not configured)")
 			// Create browser client without email support (falls back to stdin for 2FA)
 			browserClient, err = uscis.NewBrowserClient(cfg.USCISUsername, cfg.USCISPassword)
 			if err != nil {
-				log.Fatalf("Failed to create browser client: %v", err)
+				log.Printf("CRITICAL: Failed to create browser client: %v", err)
+				log.Printf("This could indicate:")
+				log.Printf("  - Incorrect USCIS username or password")
+				log.Printf("  - Account locked due to too many failed attempts")
+				log.Printf("  - USCIS website issues")
+				log.Printf("")
+				log.Printf("Exiting to prevent account lockout from repeated failed login attempts.")
+				log.Printf("Fix credentials and redeploy to retry.")
+				os.Exit(1)
 			}
 		}
 
@@ -98,8 +139,8 @@ func main() {
 	log.Printf("Running initial check for %d case(s)...", len(cfg.CaseIDs))
 	for _, caseID := range cfg.CaseIDs {
 		if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
-			log.Printf("Error checking case %s: %v", caseID, err)
-			return
+			log.Printf("[%s] Error during initial check: %v", caseID, err)
+			// Don't exit - continue running and retry on next poll
 		}
 	}
 
@@ -110,8 +151,8 @@ func main() {
 			log.Printf("Polling %d case(s)...", len(cfg.CaseIDs))
 			for _, caseID := range cfg.CaseIDs {
 				if err := checkAndNotifyCase(fetcher, emailClient, cfg, caseID); err != nil {
-					log.Printf("Error checking case %s: %v", caseID, err)
-					return
+					log.Printf("[%s] Error during poll: %v", caseID, err)
+					// Continue checking other cases even if one fails
 				}
 			}
 		case sig := <-sigChan:
