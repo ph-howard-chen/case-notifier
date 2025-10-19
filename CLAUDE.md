@@ -69,7 +69,7 @@ case-tracker/
   - `USCIS_COOKIE` - Authentication cookie for USCIS API
   - `CASE_ID` - USCIS case ID to monitor
   - `RESEND_API_KEY` - Resend API authentication key
-  - `RECIPIENT_EMAIL` - Email address for notifications (default: gtoshiba011@gmail.com)
+  - `RECIPIENT_EMAIL` - Email address for notifications
   - `POLL_INTERVAL` - Optional, defaults to 5 minutes
   - `STATE_FILE_PATH` - Optional, defaults to `/tmp/case-tracker-state.json`
 - Validation for required fields

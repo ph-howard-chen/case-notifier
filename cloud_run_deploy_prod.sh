@@ -4,11 +4,12 @@ set -e
 # USCIS Case Tracker - Cloud Run Deployment Script
 # This script builds the Docker image locally and deploys to Cloud Run
 
-# Configuration - modify these or set as environment variables
-PROJECT_ID="${GCP_PROJECT_ID:-case-notification-475103}"
-REGION="${GCP_REGION:-us-central1}"
-SERVICE_NAME="${SERVICE_NAME:-uscis-case-tracker}"
-REPOSITORY="${ARTIFACT_REGISTRY_REPO:-uscis-tracker}"
+# Configuration - read from environment variables set in .env
+# Load with: set -a && source .env && set +a
+PROJECT_ID="${GCP_PROJECT_ID}"
+REGION="${GCP_REGION}"
+SERVICE_NAME="uscis-case-tracker"
+REPOSITORY="${ARTIFACT_REGISTRY_REPO}"
 IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE_NAME}"
 
 # Colors for output
@@ -144,15 +145,19 @@ push_image() {
     info "Image pushed successfully"
 }
 
-# Update cloud-run.yaml with image name
+# Update cloud-run.yaml with image name and environment variables
 update_yaml() {
-    step "Updating cloud-run.yaml with image..."
+    step "Updating cloud-run.yaml with image and environment variables..."
 
     # Add timestamp to force new revision
     TIMESTAMP=$(date +%s)
 
-    # Create temporary file with updated image
+    # Create temporary file with updated image and env vars
     sed "s|IMAGE_PLACEHOLDER|${IMAGE_NAME}|g" cloud-run.yaml | \
+    sed "s|CASE_IDS_PLACEHOLDER|${CASE_IDS}|g" | \
+    sed "s|RECIPIENT_EMAIL_PLACEHOLDER|${RECIPIENT_EMAIL}|g" | \
+    sed "s|EMAIL_IMAP_SERVER_PLACEHOLDER|${EMAIL_IMAP_SERVER:-imap.gmail.com:993}|g" | \
+    sed "s|EMAIL_USERNAME_PLACEHOLDER|${EMAIL_USERNAME}|g" | \
     sed "s|run.googleapis.com/execution-environment: gen2|run.googleapis.com/execution-environment: gen2\n        deploy-timestamp: \"${TIMESTAMP}\"|" > cloud-run-deploy.yaml
 
     info "cloud-run-deploy.yaml updated"

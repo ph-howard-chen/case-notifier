@@ -4,13 +4,14 @@ set -e
 # USCIS Case Tracker - GCE Deployment Script
 # This script builds the Docker image and deploys to a GCE VM instance
 
-# Configuration - modify these or set as environment variables
-PROJECT_ID="${GCP_PROJECT_ID:-case-notification-475103}"
-ZONE="${GCE_ZONE:-us-central1-a}"
-INSTANCE_NAME="${GCE_INSTANCE_NAME:-instance-20251018-234158}"
+# Configuration - read from environment variables set in .env
+# Load with: set -a && source .env && set +a
+PROJECT_ID="${GCP_PROJECT_ID}"
+ZONE="${GCE_ZONE}"
+INSTANCE_NAME="${GCE_INSTANCE_NAME}"
 REPOSITORY="${ARTIFACT_REGISTRY_REPO:-uscis-tracker}"
-REGION="${GCP_REGION:-us-central1}"
-SERVICE_NAME="${SERVICE_NAME:-uscis-case-tracker}"
+REGION="${GCP_REGION}"
+SERVICE_NAME="uscis-case-tracker"
 IMAGE_NAME="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE_NAME}"
 CONTAINER_NAME="uscis-tracker"
 
@@ -238,15 +239,13 @@ sudo docker run -d \
   --name CONTAINER_PLACEHOLDER \
   --restart unless-stopped \
   -p 8080:8080 \
-  -e CASE_IDS="IOE0933798378" \
-  -e RECIPIENT_EMAIL="ph.howard.chen@gmail.com" \
-  -e POLL_INTERVAL="15m" \
+  -e CASE_IDS="CASE_IDS_PLACEHOLDER" \
+  -e RECIPIENT_EMAIL="RECIPIENT_EMAIL_PLACEHOLDER" \
+  -e POLL_INTERVAL="POLL_INTERVAL_PLACEHOLDER" \
   -e STATE_FILE_DIR="/tmp/case-tracker-states/" \
   -e AUTO_LOGIN="true" \
-  -e EMAIL_IMAP_SERVER="imap.gmail.com:993" \
-  -e EMAIL_USERNAME="gtoshiba011@gmail.com" \
-  -e EMAIL_2FA_SENDER="MyAccount@uscis.dhs.gov" \
-  -e EMAIL_2FA_TIMEOUT="10m" \
+  -e EMAIL_IMAP_SERVER="EMAIL_IMAP_SERVER_PLACEHOLDER" \
+  -e EMAIL_USERNAME="EMAIL_USERNAME_PLACEHOLDER" \
   -e RESEND_API_KEY='RESEND_API_KEY_PLACEHOLDER' \
   -e USCIS_USERNAME='USCIS_USERNAME_PLACEHOLDER' \
   -e USCIS_PASSWORD='USCIS_PASSWORD_PLACEHOLDER' \
@@ -262,6 +261,11 @@ EOF_OUTER
         -e "s|REGION_PLACEHOLDER|${REGION}-docker.pkg.dev|g" \
         -e "s|IMAGE_PLACEHOLDER|${IMAGE_NAME}|g" \
         -e "s|CONTAINER_PLACEHOLDER|${CONTAINER_NAME}|g" \
+        -e "s|CASE_IDS_PLACEHOLDER|${CASE_IDS}|g" \
+        -e "s|RECIPIENT_EMAIL_PLACEHOLDER|${RECIPIENT_EMAIL}|g" \
+        -e "s|POLL_INTERVAL_PLACEHOLDER|${POLL_INTERVAL:-15m}|g" \
+        -e "s|EMAIL_IMAP_SERVER_PLACEHOLDER|${EMAIL_IMAP_SERVER:-imap.gmail.com:993}|g" \
+        -e "s|EMAIL_USERNAME_PLACEHOLDER|${EMAIL_USERNAME}|g" \
         -e "s|RESEND_API_KEY_PLACEHOLDER|${resend_api_key}|g" \
         -e "s|USCIS_USERNAME_PLACEHOLDER|${uscis_username}|g" \
         -e "s|USCIS_PASSWORD_PLACEHOLDER|${uscis_password}|g" \

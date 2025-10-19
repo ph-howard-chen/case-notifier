@@ -70,23 +70,23 @@ func main() {
 
 		// Check if email 2FA settings are configured
 		var browserClient *uscis.BrowserClient
-		if cfg.EmailIMAPServer != "" && cfg.EmailUsername != "" && cfg.EmailPassword != "" && cfg.Email2FASender != "" {
+		if cfg.EmailIMAPServer != "" && cfg.EmailUsername != "" && cfg.EmailPassword != "" {
 			log.Printf("2FA: Automated email fetch enabled")
 			log.Printf("  Email Server: %s", cfg.EmailIMAPServer)
 			log.Printf("  Email Account: %s", cfg.EmailUsername)
-			log.Printf("  2FA Sender: %s", cfg.Email2FASender)
-			log.Printf("  2FA Timeout: %v", cfg.Email2FATimeout)
+			log.Printf("  2FA Sender: MyAccount@uscis.dhs.gov (hardcoded)")
+			log.Printf("  2FA Timeout: 10m (hardcoded)")
 
 			// Create IMAP client for automated 2FA
 			imapClient := email.NewIMAPClient(cfg.EmailIMAPServer, cfg.EmailUsername, cfg.EmailPassword)
 
-			// Create browser client with email support
+			// Create browser client with email support (hardcoded 2FA settings)
 			browserClient, err = uscis.NewBrowserClientWithEmail(
 				cfg.USCISUsername,
 				cfg.USCISPassword,
 				imapClient,
-				cfg.Email2FASender,
-				cfg.Email2FATimeout,
+				"MyAccount@uscis.dhs.gov", // Hardcoded 2FA sender
+				10*time.Minute,            // Hardcoded 2FA timeout
 			)
 			if err != nil {
 				log.Printf("CRITICAL: Failed to create browser client: %v", err)

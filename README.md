@@ -43,6 +43,8 @@ Copy `.env.example` to `.env` and configure:
 cp .env.example .env
 ```
 
+**IMPORTANT:** All user-specific configuration (emails, case IDs, credentials) should be set in `.env`. The deployment scripts automatically read from these environment variables. You do NOT need to edit any scripts or YAML files directly.
+
 **Minimum required configuration (for local testing):**
 
 ```bash
@@ -150,26 +152,38 @@ Deploy to Google Compute Engine using the free e2-micro instance.
 5. **Gmail Account**: For receiving 2FA codes (requires IMAP app password)
 6. **GCE Instance**: Create a free e2-micro VM instance
 
-### Step 1: Create Secrets in Secret Manager
+### Step 1: Configure and Load Environment Variables
+Edit `.env` and set your configuration:
 
 ```bash
-# Set your project ID
-export PROJECT_ID=your-gcp-project-id
+cp .env.example .env
+# Edit .env with your settings
+```
 
+Load environment variables from .env
+```bash
+set -a && source .env && set +a
+```
+
+**IMPORTANT:** All configuration is now centralized in `.env`. You do NOT need to edit `deploy_gce.sh` directly.
+
+### Step 2: Create Secrets in Secret Manager
+
+```bash
 # Required: Resend API key for email notifications
 echo -n "re_xxxxxxxxxxxx" | gcloud secrets create resend-api-key \
-  --data-file=- --project=$PROJECT_ID
+  --data-file=- --project=your-gcp-project-id
 
 # Required: USCIS login credentials (browser automation)
 echo -n "your_uscis_username" | gcloud secrets create uscis-username \
-  --data-file=- --project=$PROJECT_ID
+  --data-file=- --project=your-gcp-project-id
 
 echo -n "your_uscis_password" | gcloud secrets create uscis-password \
-  --data-file=- --project=$PROJECT_ID
+  --data-file=- --project=your-gcp-project-id
 
 # Required: Gmail app password for 2FA code retrieval
 echo -n "your_gmail_app_password" | gcloud secrets create email-app-password \
-  --data-file=- --project=$PROJECT_ID
+  --data-file=- --project=your-gcp-project-id
 ```
 
 **How to get Gmail app password:**
@@ -180,33 +194,33 @@ echo -n "your_gmail_app_password" | gcloud secrets create email-app-password \
 **How to check/update secrets:**
 ```bash
 # List all secrets
-gcloud secrets list --project=$PROJECT_ID
+gcloud secrets list --project=your-gcp-project-id
 
 # View a secret value
-gcloud secrets versions access latest --secret=uscis-username --project=$PROJECT_ID
-gcloud secrets versions access latest --secret=uscis-password --project=$PROJECT_ID
+gcloud secrets versions access latest --secret=uscis-username --project=your-gcp-project-id
+gcloud secrets versions access latest --secret=uscis-password --project=your-gcp-project-id
 
 # Update a secret (add new version)
 echo -n "new_password" | gcloud secrets versions add uscis-password \
-  --data-file=- --project=$PROJECT_ID
+  --data-file=- --project=your-gcp-project-id
 ```
 
-### Step 2: Create GCE VM Instance
+### Step 3: Create GCE VM Instance
 
 Create a free e2-micro VM instance:
 
 ```bash
 # Create e2-micro instance in us-central1 (free tier eligible)
-gcloud compute instances create uscis-tracker-vm \
-  --project=$PROJECT_ID \
-  --zone=us-central1-a \
+gcloud compute instances create your-vm-name \
+  --project=your-gcp-project-id \
+  --zone=your-gcp-zone \
   --machine-type=e2-micro \
   --network-interface=network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default \
   --maintenance-policy=MIGRATE \
   --provisioning-model=STANDARD \
   --scopes=https://www.googleapis.com/auth/cloud-platform \
   --tags=http-server,https-server \
-  --create-disk=auto-delete=yes,boot=yes,device-name=uscis-tracker-vm,image=projects/debian-cloud/global/images/debian-12-bookworm-v20241009,mode=rw,size=10,type=pd-balanced \
+  --create-disk=auto-delete=yes,boot=yes,device-name=your-vm-name,image=projects/debian-cloud/global/images/debian-12-bookworm-v20241009,mode=rw,size=10,type=pd-balanced \
   --no-shielded-secure-boot \
   --shielded-vtpm \
   --shielded-integrity-monitoring \
@@ -214,41 +228,21 @@ gcloud compute instances create uscis-tracker-vm \
   --reservation-affinity=any
 ```
 
-**Important**: Use zones `us-west1`, `us-central1`, or `us-east1` for free tier eligibility.
-
-### Step 3: Grant Secret Manager Access
+### Step 4: Grant Secret Manager Access
 
 Grant the VM service account permission to access secrets:
 
 ```bash
 # Get your project number
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+PROJECT_NUMBER=$(gcloud projects describe your-gcp-project-id --format="value(projectNumber)")
 
 # Grant Secret Manager access to default compute service account
-gcloud projects add-iam-policy-binding $PROJECT_ID \
+gcloud projects add-iam-policy-binding your-gcp-project-id \
   --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
 
 **What this does:** Allows the GCE VM to read the secrets you created in Step 1.
-
-### Step 4: Update deploy_gce.sh
-
-Edit `deploy_gce.sh` and update the configuration variables at the top:
-
-```bash
-PROJECT_ID="your-gcp-project-id"
-ZONE="us-central1-a"
-INSTANCE_NAME="uscis-tracker-vm"  # Use the instance name you created
-```
-
-Also update the case IDs and email in the docker run command inside the script (lines 241-248):
-
-```bash
--e CASE_IDS="IOE0933798378,IOE0944567890" \
--e RECIPIENT_EMAIL="your-email@example.com" \
--e EMAIL_USERNAME="your-email@gmail.com" \
-```
 
 ### Step 5: Deploy
 
@@ -272,47 +266,47 @@ The script will:
 
 ```bash
 # View container logs
-gcloud compute ssh uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID \
+gcloud compute ssh your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id \
   --command='sudo docker logs -f uscis-tracker'
 
 # Check container status
-gcloud compute ssh uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID \
+gcloud compute ssh your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id \
   --command='sudo docker ps -a --filter name=uscis-tracker'
 
 # SSH into VM (for debugging)
-gcloud compute ssh uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID
+gcloud compute ssh your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id
 ```
 
 ### Step 7: Stop or Delete
 
 ```bash
 # Stop container (keeps VM running)
-gcloud compute ssh uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID \
+gcloud compute ssh your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id \
   --command='sudo docker stop uscis-tracker'
 
 # Restart container
-gcloud compute ssh uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID \
+gcloud compute ssh your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id \
   --command='sudo docker start uscis-tracker'
 
 # Stop VM instance (saves money if not using)
-gcloud compute instances stop uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID
+gcloud compute instances stop your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id
 
 # Delete VM instance completely
-gcloud compute instances delete uscis-tracker-vm \
-  --zone=us-central1-a \
-  --project=$PROJECT_ID \
+gcloud compute instances delete your-vm-name \
+  --zone=your-gcp-zone \
+  --project=your-gcp-project-id \
   --quiet
 ```
 
@@ -341,60 +335,29 @@ Deploy to Google Cloud Run for serverless, auto-scaling deployment.
 4. **USCIS Account**: Valid username and password
 5. **Gmail Account**: For receiving 2FA codes (requires IMAP app password)
 
-### Step 1: Create Secrets in Secret Manager
+### Step 1: Configure and Load Environment Variables
+Same as Option 2
+
+### Step 2: Create Secrets in Secret Manager
+Same as Option 2
+
+### Step 3: Grant Secret Manager Access
 
 ```bash
-# Set your project ID
-export PROJECT_ID=your-gcp-project-id
-
-# Required: Resend API key for email notifications
-echo -n "re_xxxxxxxxxxxx" | gcloud secrets create resend-api-key \
-  --data-file=- --project=$PROJECT_ID
-
-# Required: USCIS login credentials (browser automation)
-echo -n "your_uscis_username" | gcloud secrets create uscis-username \
-  --data-file=- --project=$PROJECT_ID
-
-echo -n "your_uscis_password" | gcloud secrets create uscis-password \
-  --data-file=- --project=$PROJECT_ID
-
-# Required: Gmail app password for 2FA code retrieval
-echo -n "your_gmail_app_password" | gcloud secrets create email-app-password \
-  --data-file=- --project=$PROJECT_ID
-```
-
-### Step 2: Grant Secret Manager Access
-
-```bash
-# Get your project number
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-
 # Grant Secret Manager access to Cloud Run service account
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding your-gcp-project-id \
+  --member="default@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
-```
 
-### Step 3: Update cloud-run.yaml
 
-Edit `cloud-run.yaml` and update:
-
-```yaml
-env:
-- name: CASE_IDS
-  value: "IOE1234567890,IOE0987654321"  # Your case IDs
-
-- name: RECIPIENT_EMAIL
-  value: "your-email@example.com"  # Your email
-
-- name: EMAIL_USERNAME
-  value: "your-email@gmail.com"  # Your Gmail for 2FA
+gcloud projects add-iam-policy-binding your-gcp-project-id \
+  --member="default@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/run.serviceAgent"
 ```
 
 ### Step 4: Deploy
-
 ```bash
-./deploy_prod.sh
+./cloud_run_deploy_prod.sh
 ```
 
 The script will:
@@ -411,11 +374,11 @@ The script will:
 # View logs
 gcloud logging read \
   "resource.type=cloud_run_revision AND resource.labels.service_name=uscis-case-tracker" \
-  --limit 50 --project=$PROJECT_ID
+  --limit 50 --project=your-gcp-project-id
 
 # View service status
 gcloud run services describe uscis-case-tracker \
-  --region=us-central1 --project=$PROJECT_ID
+  --region=us-central1 --project=your-gcp-project-id
 ```
 
 ### Step 6: Stop or Delete the Service
@@ -424,14 +387,14 @@ gcloud run services describe uscis-case-tracker \
 # Stop the service (delete it completely)
 gcloud run services delete uscis-case-tracker \
   --region=us-central1 \
-  --project=$PROJECT_ID \
+  --project=your-gcp-project-id \
   --quiet
 
 # Or update traffic to 0 to pause without deleting
 gcloud run services update-traffic uscis-case-tracker \
   --to-revisions=LATEST=0 \
   --region=us-central1 \
-  --project=$PROJECT_ID
+  --project=your-gcp-project-id
 ```
 
 **Pros:**
@@ -580,11 +543,11 @@ If you see login failure in the logs, the service automatically exits to prevent
 
 ```bash
 # Check container status
-gcloud compute ssh uscis-tracker-vm --zone=us-central1-a \
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
   --command='sudo docker ps -a --filter name=uscis-tracker'
 
 # View logs to see the error
-gcloud compute ssh uscis-tracker-vm --zone=us-central1-a \
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
   --command='sudo docker logs --tail=50 uscis-tracker'
 ```
 
@@ -599,13 +562,13 @@ gcloud compute ssh uscis-tracker-vm --zone=us-central1-a \
 - Prevents repeated failed login attempts that could lock your USCIS account
 
 **To retry after fixing credentials:**
-1. Update secrets in Secret Manager: `gcloud secrets versions add uscis-password --data-file=- --project=$PROJECT_ID`
+1. Update secrets in Secret Manager: `gcloud secrets versions add uscis-password --data-file=- --project=your-gcp-project-id`
 2. Redeploy: `./deploy_gce.sh` (automatically uses new credentials)
 
 **Problem: Docker not installed on VM**
 ```bash
 # SSH into VM and install Docker manually
-gcloud compute ssh uscis-tracker-vm --zone=us-central1-a
+gcloud compute ssh your-vm-name --zone=your-gcp-zone
 sudo apt-get update && sudo apt-get install -y docker.io
 sudo systemctl start docker
 sudo systemctl enable docker
@@ -614,26 +577,26 @@ sudo systemctl enable docker
 **Problem: Container won't start**
 ```bash
 # Check Docker logs
-gcloud compute ssh uscis-tracker-vm --zone=us-central1-a \
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
   --command='sudo docker logs uscis-tracker'
 
 # Check if container is running
-gcloud compute ssh uscis-tracker-vm --zone=us-central1-a \
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
   --command='sudo docker ps -a'
 ```
 
 **Problem: Can't pull image from Artifact Registry**
 ```bash
 # Configure Docker authentication on VM
-gcloud compute ssh uscis-tracker-vm --zone=us-central1-a \
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
   --command='gcloud auth configure-docker us-central1-docker.pkg.dev --quiet'
 ```
 
 **Problem: Secret Manager access denied**
 ```bash
 # Grant permissions to VM service account
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
-gcloud projects add-iam-policy-binding $PROJECT_ID \
+PROJECT_NUMBER=$(gcloud projects describe your-gcp-project-id --format="value(projectNumber)")
+gcloud projects add-iam-policy-binding your-gcp-project-id \
   --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
@@ -642,15 +605,15 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ```bash
 # Check service account permissions
-gcloud projects get-iam-policy $PROJECT_ID
+gcloud projects get-iam-policy your-gcp-project-id
 
 # Verify secrets exist
-gcloud secrets list --project=$PROJECT_ID
+gcloud secrets list --project=your-gcp-project-id
 
 # Check service logs
 gcloud logging read \
   "resource.type=cloud_run_revision AND severity>=ERROR" \
-  --limit 50 --project=$PROJECT_ID
+  --limit 50 --project=your-gcp-project-id
 ```
 
 ### Memory Issues (Auto-login mode)
@@ -667,15 +630,15 @@ resources:
 
 ```bash
 # Stop the instance first
-gcloud compute instances stop uscis-tracker-vm --zone=us-central1-a
+gcloud compute instances stop your-vm-name --zone=your-gcp-zone
 
 # Change machine type
-gcloud compute instances set-machine-type uscis-tracker-vm \
+gcloud compute instances set-machine-type your-vm-name \
   --machine-type=e2-small \
-  --zone=us-central1-a
+  --zone=your-gcp-zone
 
 # Start the instance
-gcloud compute instances start uscis-tracker-vm --zone=us-central1-a
+gcloud compute instances start your-vm-name --zone=your-gcp-zone
 ```
 
 **Note**: e2-small is NOT free tier. Consider optimizing your application instead.
