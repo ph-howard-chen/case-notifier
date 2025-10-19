@@ -321,6 +321,86 @@ gcloud compute instances delete your-vm-name \
 - ❌ No auto-scaling
 - ❌ Requires more setup than Cloud Run
 
+### Troubleshooting (GCE)
+
+**Problem: Authentication failures**
+
+If you see login failure in the logs, the service automatically exits to prevent account lockout:
+
+```bash
+# Check container status
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+  --command='sudo docker ps -a --filter name=uscis-tracker'
+
+# View logs to see the error
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+  --command='sudo docker logs --tail=50 uscis-tracker'
+```
+
+**What causes this:**
+- Incorrect USCIS username or password
+- Account locked due to too many failed attempts
+- Email password incorrect (for 2FA)
+
+**How it protects you:**
+- Service exits with error code 1 on first auth failure
+- Docker does NOT restart on exit code 1 (only restarts on normal exit)
+- Prevents repeated failed login attempts that could lock your USCIS account
+
+**To retry after fixing credentials:**
+1. Update secrets in Secret Manager: `echo -n "new_password" | gcloud secrets versions add uscis-password --data-file=- --project=your-gcp-project-id`
+2. Redeploy: `./deploy_gce.sh` (automatically uses new credentials)
+
+**Problem: Docker not installed on VM**
+```bash
+# SSH into VM and install Docker manually
+gcloud compute ssh your-vm-name --zone=your-gcp-zone
+sudo apt-get update && sudo apt-get install -y docker.io
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
+**Problem: Container won't start**
+```bash
+# Check Docker logs
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+  --command='sudo docker logs uscis-tracker'
+
+# Check if container is running
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+  --command='sudo docker ps -a'
+```
+
+**Problem: Can't pull image from Artifact Registry**
+```bash
+# Configure Docker authentication on VM
+gcloud compute ssh your-vm-name --zone=your-gcp-zone \
+  --command='gcloud auth configure-docker us-central1-docker.pkg.dev --quiet'
+```
+
+**Problem: Secret Manager access denied**
+
+See "Step 2: Create Secrets in Secret Manager"
+
+**Problem: Memory Issues (Auto-login mode)**
+
+Upgrade to a larger instance type (but this loses free tier):
+
+```bash
+# Stop the instance first
+gcloud compute instances stop your-vm-name --zone=your-gcp-zone
+
+# Change machine type
+gcloud compute instances set-machine-type your-vm-name \
+  --machine-type=e2-small \
+  --zone=your-gcp-zone
+
+# Start the instance
+gcloud compute instances start your-vm-name --zone=your-gcp-zone
+```
+
+**Note**: e2-small is NOT free tier. Consider optimizing your application instead.
+
 ---
 
 ## Option 3: Cloud Run Deployment (~$5-10/month)
@@ -414,6 +494,47 @@ gcloud run services update-traffic uscis-case-tracker \
 - Setting min-instances=0 would break the entire service
 
 **Note**: Deleting the service stops all instances and billing. You can redeploy anytime with `./deploy_cloud_run.sh`.
+
+### Troubleshooting (Cloud Run)
+
+**Problem: Authentication failures**
+
+Same as Option 2 (GCE). You will receive an email notification when authentication fails.
+
+**To retry after fixing credentials:**
+1. Update secrets in Secret Manager: `echo -n "new_password" | gcloud secrets versions add uscis-password --data-file=- --project=your-gcp-project-id`
+2. Redeploy: `./deploy_cloud_run.sh` (automatically uses new credentials)
+
+**Problem: Deployment fails**
+
+```bash
+# Check service account permissions
+gcloud projects get-iam-policy your-gcp-project-id
+
+# Verify secrets exist
+gcloud secrets list --project=your-gcp-project-id
+
+# Check service logs for errors
+gcloud logging read \
+  "resource.type=cloud_run_revision AND severity>=ERROR" \
+  --limit 50 --project=your-gcp-project-id
+```
+
+**Problem: Secret Manager access denied**
+
+See "Step 3: Grant Secret Manager Access"
+
+**Problem: Memory Issues (Auto-login mode)**
+
+Increase memory in `cloud-run.yaml`:
+
+```yaml
+resources:
+  limits:
+    memory: 1Gi  # Increase from 512Mi if needed
+```
+
+Then redeploy: `./deploy_cloud_run.sh`
 
 ---
 
@@ -531,126 +652,6 @@ tail -f tracker.log
              │   Notifier   │ Send email
              └──────────────┘
 ```
-
-## Troubleshooting
-
-### Docker Build Fails
-
-```bash
-# Clear Docker cache
-docker system prune -a
-
-# Rebuild without cache
-docker build --no-cache -t tracker .
-```
-
-### GCE Deployment Issues
-
-**Problem: Authentication failures**
-
-If you see login failure in the logs, the service automatically exits to prevent account lockout:
-
-```bash
-# Check container status
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
-  --command='sudo docker ps -a --filter name=uscis-tracker'
-
-# View logs to see the error
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
-  --command='sudo docker logs --tail=50 uscis-tracker'
-```
-
-**What causes this:**
-- Incorrect USCIS username or password
-- Account locked due to too many failed attempts
-- Email password incorrect (for 2FA)
-
-**How it protects you:**
-- Service exits with error code 1 on first auth failure
-- Docker does NOT restart on exit code 1 (only restarts on normal exit)
-- Prevents repeated failed login attempts that could lock your USCIS account
-
-**To retry after fixing credentials:**
-1. Update secrets in Secret Manager: `gcloud secrets versions add uscis-password --data-file=- --project=your-gcp-project-id`
-2. Redeploy: `./deploy_gce.sh` (automatically uses new credentials)
-
-**Problem: Docker not installed on VM**
-```bash
-# SSH into VM and install Docker manually
-gcloud compute ssh your-vm-name --zone=your-gcp-zone
-sudo apt-get update && sudo apt-get install -y docker.io
-sudo systemctl start docker
-sudo systemctl enable docker
-```
-
-**Problem: Container won't start**
-```bash
-# Check Docker logs
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
-  --command='sudo docker logs uscis-tracker'
-
-# Check if container is running
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
-  --command='sudo docker ps -a'
-```
-
-**Problem: Can't pull image from Artifact Registry**
-```bash
-# Configure Docker authentication on VM
-gcloud compute ssh your-vm-name --zone=your-gcp-zone \
-  --command='gcloud auth configure-docker us-central1-docker.pkg.dev --quiet'
-```
-
-**Problem: Secret Manager access denied**
-```bash
-# Grant permissions to VM service account
-PROJECT_NUMBER=$(gcloud projects describe your-gcp-project-id --format="value(projectNumber)")
-gcloud projects add-iam-policy-binding your-gcp-project-id \
-  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-```
-
-### Cloud Run Deployment Fails
-
-```bash
-# Check service account permissions
-gcloud projects get-iam-policy your-gcp-project-id
-
-# Verify secrets exist
-gcloud secrets list --project=your-gcp-project-id
-
-# Check service logs
-gcloud logging read \
-  "resource.type=cloud_run_revision AND severity>=ERROR" \
-  --limit 50 --project=your-gcp-project-id
-```
-
-### Memory Issues (Auto-login mode)
-
-**For Cloud Run** - Increase memory in `cloud-run.yaml`:
-
-```yaml
-resources:
-  limits:
-    memory: 1Gi  # Increase from 512Mi
-```
-
-**For GCE** - Upgrade to a larger instance type (but this loses free tier):
-
-```bash
-# Stop the instance first
-gcloud compute instances stop your-vm-name --zone=your-gcp-zone
-
-# Change machine type
-gcloud compute instances set-machine-type your-vm-name \
-  --machine-type=e2-small \
-  --zone=your-gcp-zone
-
-# Start the instance
-gcloud compute instances start your-vm-name --zone=your-gcp-zone
-```
-
-**Note**: e2-small is NOT free tier. Consider optimizing your application instead.
 
 ## Development
 
