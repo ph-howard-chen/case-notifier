@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -186,20 +185,12 @@ func checkAndNotifyCase(fetcher CaseStatusFetcher, emailClient *notifier.ResendC
 	// Fetch case status
 	status, err := fetcher.FetchCaseStatus(caseID)
 	if err != nil {
-		// Check if it's an authentication error (manual cookie mode)
+		// Check if it's an authentication error (both manual cookie and browser auto-login modes)
 		if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
-			log.Printf("Authentication failed! Cookie may have expired.")
-			// Send alert email
-			sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "polling (manual cookie mode)")
+			log.Printf("Authentication failed! Sending email notification...")
+			// Send alert email (works for both modes)
+			sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "polling")
 			return fmt.Errorf("authentication failed: %w", err)
-		}
-
-		// Check if it's a session refresh failure (browser auto-login mode)
-		if strings.Contains(err.Error(), "session refresh failed") {
-			log.Printf("Session refresh failed! Credentials may be incorrect or account locked.")
-			// Send alert email
-			sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "polling (session refresh)")
-			return fmt.Errorf("session refresh failed: %w", err)
 		}
 
 		return fmt.Errorf("failed to fetch case status: %w", err)

@@ -83,7 +83,8 @@ func NewBrowserClientWithEmail(uscisUsername, uscisPassword string, emailClient 
 	// Perform login
 	if err := client.login(); err != nil {
 		client.Close()
-		return nil, err
+		// Wrap login failure in ErrAuthenticationFailed for consistent error handling
+		return nil, &ErrAuthenticationFailed{StatusCode: 0} // 0 indicates browser login failure (not HTTP status)
 	}
 
 	return client, nil
@@ -281,7 +282,8 @@ func (bc *BrowserClient) FetchCaseStatus(caseID string) (map[string]interface{},
 
 		if refreshErr := bc.RefreshSession(); refreshErr != nil {
 			log.Printf("Failed to refresh session: %v", refreshErr)
-			return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
+			// Return ErrAuthenticationFailed for consistent error handling
+			return nil, &ErrAuthenticationFailed{StatusCode: 0} // 0 indicates session refresh failure
 		}
 
 		log.Printf("Session refreshed, retrying request...")
