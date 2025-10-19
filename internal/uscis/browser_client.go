@@ -280,7 +280,7 @@ func (bc *BrowserClient) FetchCaseStatus(caseID string) (map[string]interface{},
 		log.Printf("Possible session expiration detected (null data), attempting to refresh...")
 
 		if refreshErr := bc.RefreshSession(); refreshErr != nil {
-			log.Fatalf("Failed to refresh session: %v", err)
+			log.Printf("Failed to refresh session: %v", refreshErr)
 			return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
 		}
 

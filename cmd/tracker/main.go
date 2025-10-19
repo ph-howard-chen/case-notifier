@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,6 +63,9 @@ func main() {
 		}
 	}()
 
+	// Initialize email client early so we can send notifications
+	emailClient := notifier.NewResendClient(cfg.ResendAPIKey)
+
 	// Initialize USCIS client based on authentication mode
 	var fetcher CaseStatusFetcher
 
@@ -95,7 +99,11 @@ func main() {
 				log.Printf("  - Account locked due to too many failed attempts")
 				log.Printf("  - USCIS website issues")
 				log.Printf("")
-				log.Printf("Exiting to prevent account lockout from repeated failed login attempts.")
+				log.Printf("Sending email notification and exiting to prevent account lockout.")
+
+				// Send email notification about authentication failure
+				sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "browser initialization")
+
 				log.Printf("Fix credentials and redeploy to retry.")
 				os.Exit(1)
 			}
@@ -110,7 +118,11 @@ func main() {
 				log.Printf("  - Account locked due to too many failed attempts")
 				log.Printf("  - USCIS website issues")
 				log.Printf("")
-				log.Printf("Exiting to prevent account lockout from repeated failed login attempts.")
+				log.Printf("Sending email notification and exiting to prevent account lockout.")
+
+				// Send email notification about authentication failure
+				sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "browser initialization")
+
 				log.Printf("Fix credentials and redeploy to retry.")
 				os.Exit(1)
 			}
@@ -123,9 +135,6 @@ func main() {
 		log.Printf("Authentication: Manual cookie mode (HTTP client)")
 		fetcher = uscis.NewClient(cfg.USCISCookie)
 	}
-
-	// Initialize email client
-	emailClient := notifier.NewResendClient(cfg.ResendAPIKey)
 
 	// Create ticker for polling
 	ticker := time.NewTicker(cfg.PollInterval)
@@ -177,21 +186,22 @@ func checkAndNotifyCase(fetcher CaseStatusFetcher, emailClient *notifier.ResendC
 	// Fetch case status
 	status, err := fetcher.FetchCaseStatus(caseID)
 	if err != nil {
-		// Check if it's an authentication error
+		// Check if it's an authentication error (manual cookie mode)
 		if _, ok := err.(*uscis.ErrAuthenticationFailed); ok {
 			log.Printf("Authentication failed! Cookie may have expired.")
 			// Send alert email
-			subject := "USCIS Case Tracker - Cookie Expired"
-			body := fmt.Sprintf(`
-				<h2>Authentication Failed</h2>
-				<p>The USCIS cookie has expired. Please update the USCIS_COOKIE environment variable with a fresh cookie.</p>
-				<p>Error: %v</p>
-			`, err)
-			if sendErr := emailClient.SendEmail(cfg.RecipientEmail, subject, body); sendErr != nil {
-				log.Printf("Failed to send alert email: %v", sendErr)
-			}
-			return fmt.Errorf("authentication failed, exiting: %w", err)
+			sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "polling (manual cookie mode)")
+			return fmt.Errorf("authentication failed: %w", err)
 		}
+
+		// Check if it's a session refresh failure (browser auto-login mode)
+		if strings.Contains(err.Error(), "session refresh failed") {
+			log.Printf("Session refresh failed! Credentials may be incorrect or account locked.")
+			// Send alert email
+			sendAuthFailureEmail(emailClient, cfg.RecipientEmail, err, "polling (session refresh)")
+			return fmt.Errorf("session refresh failed: %w", err)
+		}
+
 		return fmt.Errorf("failed to fetch case status: %w", err)
 	}
 
@@ -276,4 +286,43 @@ func formatChangeNotificationEmail(changes []uscis.Change, status map[string]int
 	`, caseID, changesHTML, string(jsonBytes))
 
 	return html
+}
+
+// sendAuthFailureEmail sends an email notification when authentication fails
+func sendAuthFailureEmail(emailClient *notifier.ResendClient, recipientEmail string, err error, context string) {
+	subject := "USCIS Case Tracker - Authentication Failed"
+	body := fmt.Sprintf(`
+		<h2>⚠️ Authentication Failed</h2>
+		<p><strong>Context:</strong> %s</p>
+		<p><strong>Error:</strong> %v</p>
+
+		<h3>What this means:</h3>
+		<ul>
+			<li><strong>Browser auto-login mode:</strong> USCIS username/password may be incorrect, or your account may be locked</li>
+			<li><strong>Manual cookie mode:</strong> Your USCIS session cookie has expired</li>
+			<li><strong>Session refresh:</strong> The service attempted to re-authenticate but failed</li>
+		</ul>
+
+		<h3>What to do:</h3>
+		<ol>
+			<li><strong>Check your credentials:</strong> Verify USCIS username and password are correct</li>
+			<li><strong>Check account status:</strong> Login to https://my.uscis.gov to verify your account is not locked</li>
+			<li><strong>Update secrets:</strong> If using GCP Secret Manager, update the secrets:
+				<pre style="background-color: #f5f5f5; padding: 10px; border-radius: 5px;">
+gcloud secrets versions add uscis-username --data-file=- --project=your-project-id
+gcloud secrets versions add uscis-password --data-file=- --project=your-project-id</pre>
+			</li>
+			<li><strong>Redeploy:</strong> Redeploy the service to pick up new credentials</li>
+		</ol>
+
+		<p><strong>Note:</strong> The service will automatically exit to prevent account lockout from repeated failed login attempts.</p>
+
+		<p><small>This alert was sent by USCIS Case Tracker</small></p>
+	`, context, err)
+
+	if sendErr := emailClient.SendEmail(recipientEmail, subject, body); sendErr != nil {
+		log.Printf("Failed to send authentication failure alert email: %v", sendErr)
+	} else {
+		log.Printf("Authentication failure alert email sent successfully to %s", recipientEmail)
+	}
 }
