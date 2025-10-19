@@ -472,7 +472,7 @@ EMAIL_2FA_TIMEOUT=5m
   - Deploy to Cloud Run
 
 **Option B: Manual deployment scripts**
-- `deploy.sh` script with `gcloud run deploy` commands
+- `deploy_prod.sh` script with `gcloud run deploy` commands
 
 **Cloud Run Settings:**
 - CPU always allocated (not request-based)
@@ -635,9 +635,25 @@ Instead of extracting cookies, we:
 ### Go Packages
 - `github.com/resend/resend-go` - Resend SDK for email notifications
 - `github.com/chromedp/chromedp` v0.14.2 - Chrome DevTools Protocol for browser automation
-- `github.com/chromedp/cdproto` - CDP protocol definitions
+- `github.com/chromedp/cdproto` v0.0.0-20250724212937-08a3db8b4327 - CDP protocol definitions
 - `github.com/emersion/go-imap` v1.2.1 - IMAP client for automated 2FA email fetching
 - Standard library: `net/http`, `encoding/json`, `time`, `os`, `log`, `bufio`, `context`, `regexp`
+
+### Go Version Requirement: Why Go 1.23?
+
+**Cannot use Go 1.21 because:**
+- `github.com/chromedp/cdproto` v0.0.0-20250724212937-08a3db8b4327 **requires Go 1.23+**
+- This is a hard dependency for browser automation (Phase 5/6)
+- Attempting to use Go 1.21 results in: `go: requires go >= 1.23`
+
+**Trade-offs:**
+- ✅ **Go 1.23** - Required for chromedp, but Bazel `rules_go v0.35.0` doesn't support it
+- ❌ **Go 1.21** - Bazel compatible, but chromedp dependencies won't compile
+
+**Solution:**
+- Use `go build` directly (not Bazel) for building the binary
+- Bazel still used for dependency management and BUILD file generation
+- Dockerfile uses `go build` in multi-stage build (no Bazel compatibility issues)
 
 ### System Requirements
 - **For Auto-Login Mode:** Chrome/Chromium browser (automatically managed by chromedp in headless mode)
@@ -699,8 +715,14 @@ Instead of extracting cookies, we:
 ## Build Notes
 
 **Current Build System:**
-- Primary: `go build` (works with Go 1.23.0+)
-- Bazel: Configured but may have compatibility issues with Go 1.23+
+- Primary: `go build` (recommended - works with Go 1.23+)
+- Bazel: Configured but `rules_go v0.35.0` doesn't support Go 1.23+
+- Docker: Uses `go build` in multi-stage build (no Bazel issues)
+
+**Why Go 1.23 is Required:**
+- chromedp/cdproto dependency requires Go 1.23+
+- Cannot downgrade to Go 1.21 without breaking browser automation
+- See "Go Version Requirement" section under Dependencies for details
 
 **Building:**
 ```bash
@@ -708,7 +730,10 @@ Instead of extracting cookies, we:
 go build ./cmd/tracker
 go build test_login.go
 
-# Using Bazel (may need updates for Go 1.23)
+# Docker build (uses go build internally)
+docker build -t uscis-tracker:test .
+
+# Using Bazel (NOT recommended - compatibility issues with Go 1.23)
 bazel build //cmd/tracker:tracker
 bazel run //:test_login
 ```

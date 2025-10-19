@@ -30,8 +30,8 @@ type BrowserClient struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	allocCancel     context.CancelFunc
-	username        string
-	password        string
+	uscisUsername   string
+	uscisPassword   string
 	emailClient     EmailFetcher  // Optional: for automated 2FA
 	email2FASender  string        // Sender email for 2FA emails
 	email2FATimeout time.Duration // Timeout for waiting for 2FA email
@@ -40,17 +40,20 @@ type BrowserClient struct {
 // NewBrowserClient creates a new browser client and performs login with 2FA support
 // The browser session remains active and is used for subsequent API calls
 // Call Close() when done to cleanup resources
-func NewBrowserClient(username, password string) (*BrowserClient, error) {
-	return NewBrowserClientWithEmail(username, password, nil, "", 5*time.Minute)
+func NewBrowserClient(uscisUsername, uscisPassword string) (*BrowserClient, error) {
+	return NewBrowserClientWithEmail(uscisUsername, uscisPassword, nil, "", 5*time.Minute)
 }
 
 // NewBrowserClientWithEmail creates a new browser client with automated email 2FA support
 // If emailClient is nil, falls back to manual stdin prompt for 2FA
-func NewBrowserClientWithEmail(username, password string, emailClient EmailFetcher, email2FASender string, email2FATimeout time.Duration) (*BrowserClient, error) {
+func NewBrowserClientWithEmail(uscisUsername, uscisPassword string, emailClient EmailFetcher, email2FASender string, email2FATimeout time.Duration) (*BrowserClient, error) {
+	log.Printf("Creating browser client...")
+
 	// Create context without timeout - we want to keep it alive
 	ctx := context.Background()
 
 	// Configure headless browser with bot detection evasion
+	log.Printf("Configuring Chrome options...")
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -60,15 +63,18 @@ func NewBrowserClientWithEmail(username, password string, emailClient EmailFetch
 		chromedp.UserAgent(`Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36`),
 	)
 
+	log.Printf("Creating Chrome allocator context...")
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
-	browserCtx, cancel := chromedp.NewContext(allocCtx)
+
+	log.Printf("Creating browser context...")
+	browserCtx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
 
 	client := &BrowserClient{
 		ctx:             browserCtx,
 		cancel:          cancel,
 		allocCancel:     allocCancel,
-		username:        username,
-		password:        password,
+		uscisUsername:   uscisUsername,
+		uscisPassword:   uscisPassword,
 		emailClient:     emailClient,
 		email2FASender:  email2FASender,
 		email2FATimeout: email2FATimeout,
@@ -86,37 +92,84 @@ func NewBrowserClientWithEmail(username, password string, emailClient EmailFetch
 // login performs the authentication flow with 2FA support
 func (bc *BrowserClient) login() error {
 	log.Printf("Starting login automation...")
+	log.Printf("Username: %s", bc.uscisUsername)
+	log.Printf("Password: %s (length: %d)", strings.Repeat("*", len(bc.uscisPassword)), len(bc.uscisPassword))
 	var currentURL string
 
 	// Perform login and wait for AWS WAF challenges
+	log.Printf("Navigating to login page: %s", loginPageURL)
 	err := chromedp.Run(bc.ctx,
 		chromedp.Navigate(loginPageURL),
 		chromedp.WaitVisible(`#email-address`, chromedp.ByQuery),
-		chromedp.SendKeys(`#email-address`, bc.username, chromedp.ByQuery),
-		chromedp.SendKeys(`#password`, bc.password, chromedp.ByQuery),
-		chromedp.WaitEnabled("sign-in-btn", chromedp.ByID),
-		chromedp.Click("sign-in-btn", chromedp.ByID),
-		chromedp.Sleep(10*time.Second), // Wait for AWS WAF challenges and redirects
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			if err := chromedp.Location(&currentURL).Do(ctx); err != nil {
-				return err
-			}
-			log.Printf("Current URL after login: %s\n", currentURL)
-			return nil
-		}),
 	)
 	if err != nil {
-		return fmt.Errorf("login automation failed: %w", err)
+		return fmt.Errorf("failed to load login page: %w", err)
+	}
+
+	log.Printf("Entering credentials...")
+	err = chromedp.Run(bc.ctx,
+		chromedp.SendKeys(`#email-address`, bc.uscisUsername, chromedp.ByQuery),
+		chromedp.SendKeys(`#password`, bc.uscisPassword, chromedp.ByQuery),
+		chromedp.WaitEnabled("sign-in-btn", chromedp.ByID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to enter credentials: %w", err)
+	}
+
+	log.Printf("Clicking sign-in button...")
+	err = chromedp.Run(bc.ctx,
+		chromedp.Click("sign-in-btn", chromedp.ByID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to click sign-in button: %w", err)
+	}
+
+	log.Printf("Waiting for redirect after sign-in (AWS WAF challenges may take time)...")
+	// Poll for URL change with timeout
+	maxWait := 60 * time.Second
+	checkInterval := 2 * time.Second
+	startTime := time.Now()
+
+	for {
+		elapsed := time.Since(startTime)
+		if elapsed > maxWait {
+			return fmt.Errorf("timeout waiting for redirect after sign-in (still on %s after %v)", currentURL, elapsed)
+		}
+
+		err = chromedp.Run(bc.ctx,
+			chromedp.Sleep(checkInterval),
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				if err := chromedp.Location(&currentURL).Do(ctx); err != nil {
+					return err
+				}
+				log.Printf("Current URL: %s (elapsed: %.0fs)", currentURL, elapsed.Seconds())
+				return nil
+			}),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to check URL: %w", err)
+		}
+
+		// Check if we've been redirected away from sign-in page
+		if !strings.Contains(currentURL, "/sign-in") {
+			log.Printf("Redirected away from sign-in page to: %s", currentURL)
+			break
+		}
 	}
 
 	// Handle 2FA if required
 	if strings.Contains(currentURL, "/auth") {
+		log.Printf("2FA required - URL contains /auth")
 		if err := bc.handle2FA(); err != nil {
 			return err
 		}
+		log.Printf("2FA verification completed successfully")
+	} else {
+		log.Printf("No 2FA required - already redirected to: %s", currentURL)
 	}
 
 	// Navigate to applicant page to initialize session for API access
+	log.Printf("Navigating to applicant page %s to finalize login", applicantURL)
 	err = chromedp.Run(bc.ctx,
 		chromedp.Navigate(applicantURL),
 		chromedp.Sleep(3*time.Second),
@@ -138,12 +191,20 @@ func (bc *BrowserClient) handle2FA() error {
 
 	// Try automated email fetch if configured
 	if bc.emailClient != nil && bc.email2FASender != "" {
-		log.Printf("Fetching 2FA code from email (sender: %s)...", bc.email2FASender)
+		log.Printf("Attempting automated 2FA code fetch from email...")
+		log.Printf("  Email sender: %s", bc.email2FASender)
+		log.Printf("  Timeout: %v", bc.email2FATimeout)
+		log.Printf("Waiting for 2FA email (this may take up to %v)...", bc.email2FATimeout)
+
 		code, err = bc.emailClient.FetchLatest2FACode(bc.email2FASender, bc.email2FATimeout)
 		if err != nil {
 			log.Printf("Failed to fetch 2FA code from email: %v", err)
 			log.Printf("Falling back to manual input...")
+		} else {
+			log.Printf("Successfully retrieved 2FA code from email")
 		}
+	} else {
+		log.Printf("Automated email fetch not configured")
 	}
 
 	// Fall back to manual input if email fetch failed or not configured
@@ -158,7 +219,7 @@ func (bc *BrowserClient) handle2FA() error {
 		code = strings.TrimSpace(code)
 	}
 
-	log.Printf("Submitting verification code %s...", code)
+	log.Printf("Submitting verification code...")
 	var currentURL string
 	err = chromedp.Run(bc.ctx,
 		// use SendKeys - JavaScript value setting gets cleared on submit
@@ -190,7 +251,6 @@ func (bc *BrowserClient) handle2FA() error {
 		return fmt.Errorf("2FA submission failed: %w", err)
 	}
 
-	log.Printf("2FA verification completed successfully")
 	return nil
 }
 
@@ -220,6 +280,7 @@ func (bc *BrowserClient) FetchCaseStatus(caseID string) (map[string]interface{},
 		log.Printf("Possible session expiration detected (null data), attempting to refresh...")
 
 		if refreshErr := bc.RefreshSession(); refreshErr != nil {
+			log.Fatalf("Failed to refresh session: %v", err)
 			return nil, fmt.Errorf("session refresh failed: %w (original error: %v)", refreshErr, err)
 		}
 
@@ -233,6 +294,7 @@ func (bc *BrowserClient) FetchCaseStatus(caseID string) (map[string]interface{},
 // fetchCaseStatusInternal performs the actual API call via browser navigation
 func (bc *BrowserClient) fetchCaseStatusInternal(caseID string) (map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/%s", caseAPIURL, caseID)
+	log.Printf("Navigating to API URL: %s", url)
 
 	var apiResponse string
 	err := chromedp.Run(bc.ctx,
@@ -245,13 +307,31 @@ func (bc *BrowserClient) fetchCaseStatusInternal(caseID string) (map[string]inte
 	)
 
 	if err != nil {
+		log.Printf("Failed to navigate to API URL: %v", err)
 		return nil, fmt.Errorf("failed to navigate to API URL: %w", err)
+	}
+
+	log.Printf("API response received (length: %d bytes)", len(apiResponse))
+	if len(apiResponse) > 200 {
+		log.Printf("API response preview: %s...", apiResponse[:200])
+	} else {
+		log.Printf("API response: %s", apiResponse)
 	}
 
 	// Parse JSON response
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(apiResponse), &result); err != nil {
+		log.Printf("Failed to parse API response as JSON: %v", err)
 		return nil, fmt.Errorf("failed to parse API response: %w", err)
+	}
+
+	// Check if data field is null
+	if data, ok := result["data"]; ok {
+		if data == nil {
+			log.Printf("API returned null data - possible session issue")
+		} else {
+			log.Printf("API returned valid data")
+		}
 	}
 
 	return result, nil

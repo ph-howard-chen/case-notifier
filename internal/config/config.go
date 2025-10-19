@@ -94,7 +94,7 @@ func Load() (*Config, error) {
 	// Parse poll interval with default
 	pollIntervalStr := os.Getenv("POLL_INTERVAL")
 	if pollIntervalStr == "" {
-		cfg.PollInterval = 5 * time.Minute
+		cfg.PollInterval = 15 * time.Minute
 	} else {
 		interval, err := time.ParseDuration(pollIntervalStr)
 		if err != nil {
