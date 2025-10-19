@@ -582,8 +582,6 @@ Then redeploy: `./deploy_cloud_run.sh`
 | `EMAIL_IMAP_SERVER` | Yes | - | IMAP server (e.g., imap.gmail.com:993) |
 | `EMAIL_USERNAME` | Yes | - | Gmail for receiving 2FA codes |
 | `EMAIL_PASSWORD` | Yes | - | Gmail app password (NOT regular password) |
-| `EMAIL_2FA_SENDER` | No | MyAccount@uscis.dhs.gov | USCIS 2FA sender email |
-| `EMAIL_2FA_TIMEOUT` | No | 5m | Max wait time for 2FA email |
 
 ## Cost Optimization
 
@@ -632,13 +630,6 @@ tail -f tracker.log
 ```
 
 ## Architecture
-
-### Authentication Modes
-
-| Mode | Pros | Cons | Recommended For |
-|------|------|------|-----------------|
-| **Manual Cookie** | ✅ Lightweight<br>✅ Fast startup<br>✅ Quick local testing | ❌ Manual cookie refresh needed<br>❌ Cookies expire frequently<br>❌ No 2FA automation | Local development only |
-| **Browser Automation** | ✅ Auto-login<br>✅ Session auto-refresh<br>✅ 2FA support<br>✅ Production-ready | ❌ Larger image (~1GB)<br>❌ Higher memory (1Gi)<br>❌ Includes Chromium | Cloud Run production |
 
 ### Key Components
 
